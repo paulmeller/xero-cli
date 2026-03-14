@@ -37,7 +37,7 @@ brews:
       owner: paulmeller
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/paulmeller/xero-cli"
     description: "CLI for the Xero accounting API"
     license: "MIT"
