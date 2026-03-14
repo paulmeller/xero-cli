@@ -52,6 +52,9 @@ func newPaymentCreateCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a payment",
+		Example: `  xero payments create --invoice INV-0001 --account 090 --amount 500.00
+  xero payments create --invoice INV-0001 --account 090 --amount 500.00 --date 2025-03-01
+  xero payments create --file payment.json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := f.APIClient()
 			if err != nil {

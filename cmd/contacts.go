@@ -47,7 +47,34 @@ func newContactsListCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List contacts",
+		Long: `List contacts with optional filtering and pagination.
+
+Xero returns up to 100 records per page. Use --all to fetch all pages.`,
+		Example: `  xero contacts list
+  xero contacts list --all
+  xero contacts list --search "Acme"
+  xero contacts list --is-customer -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := cmdutil.GetOutputFormat(cmd, f.IO)
+			allPages, _ := cmd.Flags().GetBool("all")
+
+			// Try cache for --all with no filters
+			if allPages {
+				live, _ := cmd.Root().PersistentFlags().GetBool("live")
+				hasFilters := cmdutil.HasChangedFilterFlags(cmd) || hasChangedContactFilterFlags(cmd)
+				if !live && !hasFilters {
+					if data, ok := cmdutil.TryListCache(f, cmd, "Contacts", api.PathContacts, "ContactID"); ok {
+						items := gjson.ParseBytes(data).Get("Contacts")
+						verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+						if verbose {
+							fmt.Fprintf(f.IO.ErrOut, "(cached) contacts\n")
+						}
+						formatter := f.Formatter(format)
+						return formatter.FormatList(f.IO.Out, items, contactColumns)
+					}
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -56,9 +83,6 @@ func newContactsListCmd(f *cmdutil.Factory) *cobra.Command {
 
 			params := cmdutil.BuildListParams(cmd)
 			addContactListParams(cmd, params)
-
-			format := cmdutil.GetOutputFormat(cmd, f.IO)
-			allPages, _ := cmd.Flags().GetBool("all")
 
 			var items gjson.Result
 			if allPages {
@@ -95,6 +119,15 @@ func newContactsListCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+func hasChangedContactFilterFlags(cmd *cobra.Command) bool {
+	for _, name := range []string{"search", "ids", "is-customer", "is-supplier", "include-archived", "summary"} {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func addContactListParams(cmd *cobra.Command, params url.Values) {
 	if v, _ := cmd.Flags().GetString("search"); v != "" {
 		params.Set("searchTerm", v)
@@ -115,10 +148,30 @@ func addContactListParams(cmd *cobra.Command, params url.Values) {
 
 func newContactsGetCmd(f *cmdutil.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "get <contact-id>",
-		Short: "Get a contact by ID",
-		Args:  cobra.ExactArgs(1),
+		Use:     "get <contact-id>",
+		Short:   "Get a contact by ID",
+		Example: "  xero contacts get <contact-id>",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := cmdutil.GetOutputFormat(cmd, f.IO)
+
+			// Try cache first
+			live, _ := cmd.Root().PersistentFlags().GetBool("live")
+			if !live {
+				if data, ok := cmdutil.TryGetCache(f, cmd, "Contacts", api.PathContacts, "ContactID", args[0]); ok {
+					item := gjson.ParseBytes(data).Get("Contacts.0")
+					if !item.Exists() {
+						item = gjson.ParseBytes(data)
+					}
+					verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+					if verbose {
+						fmt.Fprintf(f.IO.ErrOut, "(cached) contact %s\n", args[0])
+					}
+					formatter := f.Formatter(format)
+					return formatter.FormatOne(f.IO.Out, item, contactColumns)
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -131,7 +184,6 @@ func newContactsGetCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			format := cmdutil.GetOutputFormat(cmd, f.IO)
 			formatter := f.Formatter(format)
 			item := gjson.ParseBytes(data).Get("Contacts.0")
 			if !item.Exists() {
@@ -146,6 +198,9 @@ func newContactsCreateCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a contact",
+		Example: `  xero contacts create --name "Acme Corp" --email acme@example.com
+  xero contacts create --file contact.json
+  cat contact.json | xero contacts create --file -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := f.APIClient()
 			if err != nil {

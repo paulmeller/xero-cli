@@ -51,7 +51,35 @@ func newInvoicesListCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List invoices",
+		Long: `List invoices with optional filtering and pagination.
+
+Xero returns up to 100 records per page. Use --all to fetch all pages.`,
+		Example: `  xero invoices list
+  xero invoices list --all
+  xero invoices list --status AUTHORISED,PAID
+  xero invoices list --contact-id <id> --date-from 2025-01-01
+  xero invoices list -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := cmdutil.GetOutputFormat(cmd, f.IO)
+			allPages, _ := cmd.Flags().GetBool("all")
+
+			// Try cache for --all with no filters
+			if allPages {
+				live, _ := cmd.Root().PersistentFlags().GetBool("live")
+				hasFilters := cmdutil.HasChangedFilterFlags(cmd) || hasChangedInvoiceFilterFlags(cmd)
+				if !live && !hasFilters {
+					if data, ok := cmdutil.TryListCache(f, cmd, "Invoices", api.PathInvoices, "InvoiceID"); ok {
+						items := gjson.ParseBytes(data).Get("Invoices")
+						verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+						if verbose {
+							fmt.Fprintf(f.IO.ErrOut, "(cached) invoices\n")
+						}
+						formatter := f.Formatter(format)
+						return formatter.FormatList(f.IO.Out, items, invoiceColumns)
+					}
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -60,9 +88,6 @@ func newInvoicesListCmd(f *cmdutil.Factory) *cobra.Command {
 
 			params := cmdutil.BuildListParams(cmd)
 			addInvoiceListParams(cmd, params)
-
-			format := cmdutil.GetOutputFormat(cmd, f.IO)
-			allPages, _ := cmd.Flags().GetBool("all")
 
 			var items gjson.Result
 			if allPages {
@@ -98,6 +123,15 @@ func newInvoicesListCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringSlice("ids", nil, "Filter by invoice IDs")
 
 	return cmd
+}
+
+func hasChangedInvoiceFilterFlags(cmd *cobra.Command) bool {
+	for _, name := range []string{"status", "contact-id", "date-from", "date-to", "summary", "numbers", "ids"} {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func addInvoiceListParams(cmd *cobra.Command, params url.Values) {
@@ -139,8 +173,29 @@ func newInvoicesGetCmd(f *cmdutil.Factory) *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <invoice-id>",
 		Short: "Get an invoice by ID or number",
-		Args:  cobra.ExactArgs(1),
+		Example: `  xero invoices get <invoice-id>
+  xero invoices get INV-0001`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := cmdutil.GetOutputFormat(cmd, f.IO)
+
+			// Try cache first
+			live, _ := cmd.Root().PersistentFlags().GetBool("live")
+			if !live {
+				if data, ok := cmdutil.TryGetCache(f, cmd, "Invoices", api.PathInvoices, "InvoiceID", args[0]); ok {
+					item := gjson.ParseBytes(data).Get("Invoices.0")
+					if !item.Exists() {
+						item = gjson.ParseBytes(data)
+					}
+					verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+					if verbose {
+						fmt.Fprintf(f.IO.ErrOut, "(cached) invoice %s\n", args[0])
+					}
+					formatter := f.Formatter(format)
+					return formatter.FormatOne(f.IO.Out, item, invoiceColumns)
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -153,7 +208,6 @@ func newInvoicesGetCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			format := cmdutil.GetOutputFormat(cmd, f.IO)
 			formatter := f.Formatter(format)
 			item := gjson.ParseBytes(data).Get("Invoices.0")
 			if !item.Exists() {
@@ -169,6 +223,9 @@ func newInvoicesCreateCmd(f *cmdutil.Factory) *cobra.Command {
 		Use:   "create",
 		Short: "Create an invoice",
 		Long:  "Create an invoice from --file (JSON) or inline flags. Use --file - for stdin. JSON arrays create batch invoices (up to 50).",
+		Example: `  xero invoices create --contact "Acme Corp" --line "Consulting,10,150,200"
+  xero invoices create --file invoice.json
+  cat invoice.json | xero invoices create --file -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := f.APIClient()
 			if err != nil {

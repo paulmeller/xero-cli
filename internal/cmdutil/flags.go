@@ -24,6 +24,9 @@ func BuildListParams(cmd *cobra.Command) url.Values {
 		params.Set("page", fmt.Sprintf("%d", v))
 	}
 	if v, _ := cmd.Flags().GetInt("page-size"); v > 0 {
+		if v > 100 {
+			v = 100 // Xero API max
+		}
 		params.Set("pageSize", fmt.Sprintf("%d", v))
 	}
 	if v, _ := cmd.Flags().GetString("modified-since"); v != "" {
@@ -51,6 +54,19 @@ func ConfirmAction(ios *IOStreams, msg string, cmd *cobra.Command) bool {
 	if scanner.Scan() {
 		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 		return answer == "y" || answer == "yes"
+	}
+	return false
+}
+
+// HasChangedFilterFlags returns true if any server-side filter flags have been set.
+// Used to determine if a request can be served from cache.
+func HasChangedFilterFlags(cmd *cobra.Command) bool {
+	// Global filter flags
+	globalFilters := []string{"where", "order", "page", "modified-since"}
+	for _, name := range globalFilters {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
 	}
 	return false
 }

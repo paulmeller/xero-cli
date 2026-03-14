@@ -28,7 +28,16 @@ Fish:
   $ xero completion fish | source
   # To load completions for each session, execute once:
   $ xero completion fish > ~/.config/fish/completions/xero.fish
+
+PowerShell:
+  PS> xero completion powershell | Out-String | Invoke-Expression
+  # To load completions for each session, add to your profile:
+  PS> xero completion powershell > xero.ps1 && . xero.ps1
 `,
+		Example: `  source <(xero completion bash)
+  xero completion zsh > "${fpath[1]}/_xero"
+  xero completion fish | source
+  xero completion powershell | Out-String | Invoke-Expression`,
 		DisableFlagsInUseLine: true,
 		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
 		Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),

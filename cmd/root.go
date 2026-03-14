@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -23,7 +24,9 @@ func Execute() int {
 	rootCmd := &cobra.Command{
 		Use:           "xero",
 		Short:         "Xero accounting CLI",
-		Long:          "A command-line interface for the Xero accounting API.",
+		Long: `A command-line interface for the Xero accounting API.
+
+Enable shell completions: xero completion --help`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       Version,
@@ -37,13 +40,15 @@ func Execute() int {
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable color output")
 	rootCmd.PersistentFlags().Bool("no-prompt", false, "Never prompt for confirmation; fail if confirmation required")
 	rootCmd.PersistentFlags().Int("page", 0, "Page number for paginated results")
-	rootCmd.PersistentFlags().Int("page-size", 100, "Number of items per page")
+	rootCmd.PersistentFlags().Int("page-size", 100, "Items per page (max 100)")
 	rootCmd.PersistentFlags().String("modified-since", "", "Only return items modified after this date (ISO 8601)")
 	rootCmd.PersistentFlags().String("where", "", "Filter expression (Xero where clause)")
 	rootCmd.PersistentFlags().String("order", "", "Sort expression")
 	rootCmd.PersistentFlags().Bool("dry-run", false, "Print requests without sending them")
 	rootCmd.PersistentFlags().String("config", "", "Path to config file")
 	rootCmd.PersistentFlags().Int("timeout", 30, "Request timeout in seconds")
+	rootCmd.PersistentFlags().Bool("live", false, "Bypass local cache, always fetch from API")
+	rootCmd.PersistentFlags().Duration("cache-ttl", 5*time.Minute, "Cache freshness duration (0 to disable)")
 
 	// Auto-enable --no-prompt when stdin is not a TTY
 	if !f.IO.IsTTY {
@@ -77,6 +82,7 @@ func Execute() int {
 	rootCmd.AddCommand(newReportsCmd(f))
 	rootCmd.AddCommand(newOrganisationCmd(f))
 	rootCmd.AddCommand(newSyncCmd(f))
+	rootCmd.AddCommand(newConfigCmd(f))
 	rootCmd.AddCommand(newRateLimitsCmd(f))
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {

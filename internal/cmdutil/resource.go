@@ -7,12 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
 
 	"github.com/paulmeller/xero-cli/internal/api"
+	"github.com/paulmeller/xero-cli/internal/cache"
 	"github.com/paulmeller/xero-cli/internal/output"
+	syncpkg "github.com/paulmeller/xero-cli/internal/sync"
 )
 
 // ResourceDef defines a Xero resource for auto-generated CRUD commands.
@@ -83,7 +86,33 @@ func NewListCmd(f *Factory, def ResourceDef) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: fmt.Sprintf("List %s", def.Plural),
+		Long: fmt.Sprintf(`List %s with optional filtering and pagination.
+
+Xero returns up to 100 records per page. Use --all to fetch all pages.`, def.Plural),
+		Example: fmt.Sprintf(`  xero %s list
+  xero %s list --all
+  xero %s list -o json`, def.Plural, def.Plural, def.Plural),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := GetOutputFormat(cmd, f.IO)
+			allPages, _ := cmd.Flags().GetBool("all")
+
+			// Try cache for --all with no filters
+			if allPages {
+				live, _ := cmd.Root().PersistentFlags().GetBool("live")
+				hasFilters := HasChangedFilterFlags(cmd)
+				if !live && !hasFilters {
+					if data, ok := tryListCache(f, cmd, def); ok {
+						items := gjson.ParseBytes(data).Get(def.JSONKey)
+						verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+						if verbose {
+							fmt.Fprintf(f.IO.ErrOut, "(cached) %s\n", def.Plural)
+						}
+						formatter := f.Formatter(format)
+						return formatter.FormatList(f.IO.Out, items, def.Columns)
+					}
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -95,9 +124,6 @@ func NewListCmd(f *Factory, def ResourceDef) *cobra.Command {
 				def.ListParams(cmd, params)
 			}
 
-			format := GetOutputFormat(cmd, f.IO)
-
-			allPages, _ := cmd.Flags().GetBool("all")
 			var items gjson.Result
 			if allPages {
 				pageSize, _ := cmd.Root().PersistentFlags().GetInt("page-size")
@@ -129,10 +155,35 @@ func NewListCmd(f *Factory, def ResourceDef) *cobra.Command {
 // NewGetCmd creates a get sub-command for a resource.
 func NewGetCmd(f *Factory, def ResourceDef) *cobra.Command {
 	return &cobra.Command{
-		Use:   fmt.Sprintf("get <%s-id>", def.Name),
-		Short: fmt.Sprintf("Get a %s by ID", def.Name),
-		Args:  cobra.ExactArgs(1),
+		Use:     fmt.Sprintf("get <%s-id>", def.Name),
+		Short:   fmt.Sprintf("Get a %s by ID", def.Name),
+		Example: fmt.Sprintf("  xero %s get <id>", def.Plural),
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format := GetOutputFormat(cmd, f.IO)
+
+			// Try cache first
+			live, _ := cmd.Root().PersistentFlags().GetBool("live")
+			if !live {
+				if data, ok := tryGetCache(f, cmd, def, args[0]); ok {
+					parsed := gjson.ParseBytes(data)
+					item := parsed.Get(def.JSONKey + ".0")
+					if !item.Exists() {
+						item = parsed
+					}
+					verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+					if verbose {
+						fmt.Fprintf(f.IO.ErrOut, "(cached) %s %s\n", def.Name, args[0])
+					}
+					cols := def.DetailColumns
+					if cols == nil {
+						cols = def.Columns
+					}
+					formatter := f.Formatter(format)
+					return formatter.FormatOne(f.IO.Out, item, cols)
+				}
+			}
+
 			client, err := f.APIClient()
 			if err != nil {
 				return err
@@ -145,7 +196,6 @@ func NewGetCmd(f *Factory, def ResourceDef) *cobra.Command {
 				return err
 			}
 
-			format := GetOutputFormat(cmd, f.IO)
 			parsed := gjson.ParseBytes(data)
 
 			// Try to get the single item from the wrapper
@@ -481,6 +531,122 @@ func detectContentType(path string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// StreamNameForDef returns the sync stream name for a ResourceDef.
+// Maps APIPath (e.g. "BankTransactions") to stream name (e.g. "bank_transactions").
+func StreamNameForDef(def ResourceDef) string {
+	for name, meta := range syncpkg.StreamRegistry {
+		if meta.APIPath == def.APIPath {
+			return name
+		}
+	}
+	return ""
+}
+
+// resolveCacheTTL returns the effective cache TTL from flag, config, or default.
+// Priority: --cache-ttl flag > config file > XERO_CACHE_TTL env > 5m default.
+func resolveCacheTTL(cmd *cobra.Command, f *Factory) time.Duration {
+	// Flag override (highest priority)
+	if cmd.Root().PersistentFlags().Changed("cache-ttl") {
+		if ttl, err := cmd.Root().PersistentFlags().GetDuration("cache-ttl"); err == nil {
+			return ttl
+		}
+	}
+
+	// Config/env override
+	if cfg, err := f.Config(); err == nil && cfg.Defaults.CacheTTL != "" {
+		if d, err := time.ParseDuration(cfg.Defaults.CacheTTL); err == nil {
+			return d
+		}
+	}
+
+	return 5 * time.Minute
+}
+
+// tryListCache attempts to serve a list --all request from the local sync cache.
+// Returns (data, true) on cache hit, (nil, false) on miss.
+func tryListCache(f *Factory, cmd *cobra.Command, def ResourceDef) ([]byte, bool) {
+	streamName := StreamNameForDef(def)
+	if streamName == "" {
+		return nil, false
+	}
+
+	meta, ok := syncpkg.StreamRegistry[streamName]
+	if !ok {
+		return nil, false
+	}
+
+	tenantID, err := f.TenantID(cmd)
+	if err != nil {
+		return nil, false
+	}
+
+	ttl := resolveCacheTTL(cmd, f)
+
+	// Use sync defaults for state/output paths
+	stateFile := syncpkg.TenantStateFile(".xero-sync-state.json", tenantID)
+	outputDir := syncpkg.TenantOutputDir("./xero_data", tenantID)
+
+	jsonlPath, fresh := cache.IsFresh(stateFile, outputDir, streamName, ttl)
+	if !fresh {
+		return nil, false
+	}
+
+	data, err := cache.ReadStream(jsonlPath, def.JSONKey, meta.PrimaryKey)
+	if err != nil {
+		return nil, false
+	}
+
+	return data, true
+}
+
+// tryGetCache attempts to serve a get-by-ID request from the local sync cache.
+// Returns (data, true) on cache hit, (nil, false) on miss.
+func tryGetCache(f *Factory, cmd *cobra.Command, def ResourceDef, id string) ([]byte, bool) {
+	streamName := StreamNameForDef(def)
+	if streamName == "" {
+		return nil, false
+	}
+
+	meta, ok := syncpkg.StreamRegistry[streamName]
+	if !ok {
+		return nil, false
+	}
+
+	tenantID, err := f.TenantID(cmd)
+	if err != nil {
+		return nil, false
+	}
+
+	ttl := resolveCacheTTL(cmd, f)
+
+	stateFile := syncpkg.TenantStateFile(".xero-sync-state.json", tenantID)
+	outputDir := syncpkg.TenantOutputDir("./xero_data", tenantID)
+
+	jsonlPath, fresh := cache.IsFresh(stateFile, outputDir, streamName, ttl)
+	if !fresh {
+		return nil, false
+	}
+
+	data, err := cache.ReadByID(jsonlPath, def.JSONKey, meta.PrimaryKey, id)
+	if err != nil {
+		return nil, false
+	}
+
+	return data, true
+}
+
+// TryListCache is the exported version for use by custom commands (invoices, contacts).
+func TryListCache(f *Factory, cmd *cobra.Command, jsonKey, apiPath, idField string) ([]byte, bool) {
+	def := ResourceDef{APIPath: apiPath, JSONKey: jsonKey, IDField: idField}
+	return tryListCache(f, cmd, def)
+}
+
+// TryGetCache is the exported version for use by custom commands.
+func TryGetCache(f *Factory, cmd *cobra.Command, jsonKey, apiPath, idField, id string) ([]byte, bool) {
+	def := ResourceDef{APIPath: apiPath, JSONKey: jsonKey, IDField: idField}
+	return tryGetCache(f, cmd, def, id)
 }
 
 // ApplyClientFlags reads global flags and configures the API client.

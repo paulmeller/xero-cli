@@ -20,6 +20,10 @@ func newSyncCmd(f *cmdutil.Factory) *cobra.Command {
 		Use:   "sync",
 		Short: "Sync Xero data locally (ELT)",
 		Long:  "Sync data from Xero API to local JSONL files or DuckDB for offline querying.",
+		Example: `  xero sync
+  xero sync --streams invoices,contacts
+  xero sync --full-refresh
+  xero sync init`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSync(cmd, f)
 		},
@@ -36,41 +40,7 @@ func newSyncCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-// resolveTenantID returns the effective tenant ID from --tenant flag or config.
-func resolveTenantID(cmd *cobra.Command, f *cmdutil.Factory) (string, error) {
-	if t, _ := cmd.Root().PersistentFlags().GetString("tenant"); t != "" {
-		return t, nil
-	}
-	cfg, err := f.Config()
-	if err != nil {
-		return "", err
-	}
-	if cfg.ActiveTenant == "" {
-		return "", fmt.Errorf("no tenant configured; set --tenant or run 'xero tenants switch'")
-	}
-	return cfg.ActiveTenant, nil
-}
 
-// tenantStateFile returns a per-tenant state file path.
-// e.g. ".xero-sync-state.json" → ".xero-sync-state-256a364b.json"
-func tenantStateFile(base, tenantID string) string {
-	short := tenantID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	ext := filepath.Ext(base)
-	return strings.TrimSuffix(base, ext) + "-" + short + ext
-}
-
-// tenantOutputDir returns a per-tenant output directory.
-// e.g. "./xero_data" → "./xero_data/256a364b"
-func tenantOutputDir(base, tenantID string) string {
-	short := tenantID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return filepath.Join(base, short)
-}
 
 func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 	configFile, _ := cmd.Flags().GetString("config-file")
@@ -78,7 +48,7 @@ func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 	fullRefresh, _ := cmd.Flags().GetBool("full-refresh")
 	dryRun, _ := cmd.Root().PersistentFlags().GetBool("dry-run")
 
-	tenantID, err := resolveTenantID(cmd, f)
+	tenantID, err := cmdutil.ResolveTenantID(cmd, f)
 	if err != nil {
 		return err
 	}
@@ -89,8 +59,8 @@ func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 	}
 
 	// Namespace state file and output dir by tenant
-	stateFile := tenantStateFile(syncCfg.Sync.StateFile, tenantID)
-	syncCfg.Destination.OutputDir = tenantOutputDir(syncCfg.Destination.OutputDir, tenantID)
+	stateFile := syncpkg.TenantStateFile(syncCfg.Sync.StateFile, tenantID)
+	syncCfg.Destination.OutputDir = syncpkg.TenantOutputDir(syncCfg.Destination.OutputDir, tenantID)
 
 	state, err := syncpkg.LoadState(stateFile)
 	if err != nil {
@@ -257,11 +227,11 @@ func newSyncResetCmd(f *cmdutil.Factory) *cobra.Command {
 				}
 			}
 
-			tenantID, err := resolveTenantID(cmd, f)
+			tenantID, err := cmdutil.ResolveTenantID(cmd, f)
 			if err != nil {
 				return err
 			}
-			stateFile := tenantStateFile(syncCfg.Sync.StateFile, tenantID)
+			stateFile := syncpkg.TenantStateFile(syncCfg.Sync.StateFile, tenantID)
 
 			state, err := syncpkg.LoadState(stateFile)
 			if err != nil {

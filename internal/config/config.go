@@ -21,6 +21,7 @@ type Config struct {
 type Defaults struct {
 	Output   string `toml:"output"`
 	PageSize int    `toml:"page_size"`
+	CacheTTL string `toml:"cache_ttl"` // e.g. "5m", "1h", "0" to disable
 }
 
 func ConfigDir() (string, error) {
@@ -58,8 +59,9 @@ func TokenPath() (string, error) {
 	return filepath.Join(dir, "tokens.json"), nil
 }
 
-func Load(path string) (*Config, error) {
-	cfg := &Config{
+// newDefaults returns a Config with default values (no env overlay).
+func newDefaults() *Config {
+	return &Config{
 		RedirectURI: "http://localhost:8472/callback",
 		Scopes: []string{
 			"openid", "offline_access",
@@ -77,19 +79,40 @@ func Load(path string) (*Config, error) {
 			PageSize: 100,
 		},
 	}
+}
 
-	if path == "" {
-		var err error
-		path, err = ConfigPath()
-		if err != nil {
-			return cfg, nil // Return defaults if can't find config
+// resolvePath resolves the config file path: uses the given path, or falls back to the default.
+func resolvePath(path string) (string, error) {
+	if path != "" {
+		return path, nil
+	}
+	return ConfigPath()
+}
+
+// LoadFile loads config from the TOML file only, without env-var overlays.
+// Use this when you intend to mutate and Save() — avoids baking env-var secrets into the file.
+func LoadFile(path string) (*Config, error) {
+	cfg := newDefaults()
+
+	resolved, err := resolvePath(path)
+	if err != nil {
+		return cfg, nil
+	}
+
+	if _, err := os.Stat(resolved); err == nil {
+		if _, err := toml.DecodeFile(resolved, cfg); err != nil {
+			return nil, fmt.Errorf("cannot parse config file %s: %w", resolved, err)
 		}
 	}
 
-	if _, err := os.Stat(path); err == nil {
-		if _, err := toml.DecodeFile(path, cfg); err != nil {
-			return nil, fmt.Errorf("cannot parse config file %s: %w", path, err)
-		}
+	return cfg, nil
+}
+
+// Load loads config from the TOML file, then applies env-var overlays.
+func Load(path string) (*Config, error) {
+	cfg, err := LoadFile(path)
+	if err != nil {
+		return nil, err
 	}
 
 	// Env var overlay
@@ -105,6 +128,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("XERO_GRANT_TYPE"); v != "" {
 		cfg.GrantType = v
 	}
+	if v := os.Getenv("XERO_CACHE_TTL"); v != "" {
+		cfg.Defaults.CacheTTL = v
+	}
 
 	return cfg, nil
 }
@@ -114,13 +140,31 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if _, err := EnsureConfigDir(); err != nil {
+	dir, err := EnsureConfigDir()
+	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
+	// Atomic write: write to temp file, then rename
+	tmp, err := os.CreateTemp(dir, ".config-*.toml.tmp")
 	if err != nil {
+		return fmt.Errorf("cannot create temp config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if err := toml.NewEncoder(tmp).Encode(c); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("cannot encode config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
 		return fmt.Errorf("cannot write config: %w", err)
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(c)
+	return nil
 }
