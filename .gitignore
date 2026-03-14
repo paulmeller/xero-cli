@@ -1,0 +1,32 @@
+# Binary
+xero
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sync data
+xero_data/
+*.duckdb
+*.duckdb.wal
+.xero-sync-state.json
+
+# Config (contains secrets)
+sync.toml
+.env
+.env.*
+
+# Temp data
+data/
+exports/
+
+# Claude Code project-specific settings (may contain memory/plans)
+# Only ignore root .claude/, not examples/claude-code/.claude/
+/.claude/
