@@ -15,8 +15,7 @@ xero sync
 **Homebrew:**
 
 ```bash
-brew tap paulmeller/tap
-brew install xero-cli
+brew install paulmeller/tap/xero-cli
 ```
 
 **Go:**
