@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,18 +36,63 @@ func newSyncCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+// resolveTenantID returns the effective tenant ID from --tenant flag or config.
+func resolveTenantID(cmd *cobra.Command, f *cmdutil.Factory) (string, error) {
+	if t, _ := cmd.Root().PersistentFlags().GetString("tenant"); t != "" {
+		return t, nil
+	}
+	cfg, err := f.Config()
+	if err != nil {
+		return "", err
+	}
+	if cfg.ActiveTenant == "" {
+		return "", fmt.Errorf("no tenant configured; set --tenant or run 'xero tenants switch'")
+	}
+	return cfg.ActiveTenant, nil
+}
+
+// tenantStateFile returns a per-tenant state file path.
+// e.g. ".xero-sync-state.json" → ".xero-sync-state-256a364b.json"
+func tenantStateFile(base, tenantID string) string {
+	short := tenantID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext) + "-" + short + ext
+}
+
+// tenantOutputDir returns a per-tenant output directory.
+// e.g. "./xero_data" → "./xero_data/256a364b"
+func tenantOutputDir(base, tenantID string) string {
+	short := tenantID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return filepath.Join(base, short)
+}
+
 func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 	configFile, _ := cmd.Flags().GetString("config-file")
 	streamFilter, _ := cmd.Flags().GetStringSlice("streams")
 	fullRefresh, _ := cmd.Flags().GetBool("full-refresh")
 	dryRun, _ := cmd.Root().PersistentFlags().GetBool("dry-run")
 
+	tenantID, err := resolveTenantID(cmd, f)
+	if err != nil {
+		return err
+	}
+
 	syncCfg, err := syncpkg.LoadSyncConfig(configFile)
 	if err != nil {
 		return err
 	}
 
-	state, err := syncpkg.LoadState(syncCfg.Sync.StateFile)
+	// Namespace state file and output dir by tenant
+	stateFile := tenantStateFile(syncCfg.Sync.StateFile, tenantID)
+	syncCfg.Destination.OutputDir = tenantOutputDir(syncCfg.Destination.OutputDir, tenantID)
+
+	state, err := syncpkg.LoadState(stateFile)
 	if err != nil {
 		return err
 	}
@@ -55,12 +101,7 @@ func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 		state.Streams = make(map[string]syncpkg.StreamState)
 	}
 
-	// Set tenant ID in state
-	cfg, err := f.Config()
-	if err != nil {
-		return err
-	}
-	state.TenantID = cfg.ActiveTenant
+	state.TenantID = tenantID
 
 	client, err := f.APIClient()
 	if err != nil {
@@ -80,7 +121,7 @@ func runSync(cmd *cobra.Command, f *cmdutil.Factory) error {
 	}
 
 	if !dryRun {
-		if err := syncpkg.SaveState(syncCfg.Sync.StateFile, state); err != nil {
+		if err := syncpkg.SaveState(stateFile, state); err != nil {
 			return fmt.Errorf("failed to save sync state: %w", err)
 		}
 	}
@@ -116,38 +157,67 @@ func newSyncStatusCmd(f *cmdutil.Factory) *cobra.Command {
 			configFile, _ := cmd.Parent().Flags().GetString("config-file")
 			syncCfg, err := syncpkg.LoadSyncConfig(configFile)
 			if err != nil {
-				// If no config, try to load state directly
 				syncCfg = &syncpkg.SyncConfig{
 					Sync: syncpkg.SyncSettings{StateFile: ".xero-sync-state.json"},
 				}
 			}
 
-			state, err := syncpkg.LoadState(syncCfg.Sync.StateFile)
-			if err != nil {
-				return err
+			// Find all tenant state files matching the base pattern
+			stateFiles := findTenantStateFiles(syncCfg.Sync.StateFile)
+
+			if len(stateFiles) == 0 {
+				fmt.Fprintln(f.IO.ErrOut, "No sync history. Run 'xero sync' to start.")
+				return nil
 			}
 
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
+
 			if format == "json" {
-				data, _ := json.MarshalIndent(state, "", "  ")
+				allStates := make(map[string]*syncpkg.SyncState)
+				for _, sf := range stateFiles {
+					state, err := syncpkg.LoadState(sf)
+					if err != nil {
+						continue
+					}
+					allStates[state.TenantID] = state
+				}
+				data, _ := json.MarshalIndent(allStates, "", "  ")
 				fmt.Fprintln(f.IO.Out, string(data))
 				return nil
 			}
 
-			if len(state.Streams) == 0 {
-				fmt.Fprintln(f.IO.Out, "No sync history. Run 'xero sync' to start.")
-				return nil
-			}
-
-			fmt.Fprintf(f.IO.Out, "%-25s %-25s %s\n", "STREAM", "LAST SYNC", "RECORDS")
-			fmt.Fprintf(f.IO.Out, "%s\n", strings.Repeat("-", 65))
-
-			for name, ss := range state.Streams {
-				lastSync := "never"
-				if !ss.LastSync.IsZero() {
-					lastSync = ss.LastSync.Format(time.RFC3339)
+			for i, sf := range stateFiles {
+				state, err := syncpkg.LoadState(sf)
+				if err != nil {
+					continue
 				}
-				fmt.Fprintf(f.IO.Out, "%-25s %-25s %d\n", name, lastSync, ss.RecordsSynced)
+
+				if len(stateFiles) > 1 {
+					if i > 0 {
+						fmt.Fprintln(f.IO.Out)
+					}
+					tenantLabel := state.TenantID
+					if len(tenantLabel) > 8 {
+						tenantLabel = tenantLabel[:8] + "..."
+					}
+					fmt.Fprintf(f.IO.Out, "Tenant: %s\n", tenantLabel)
+				}
+
+				if len(state.Streams) == 0 {
+					fmt.Fprintln(f.IO.Out, "  No sync history.")
+					continue
+				}
+
+				fmt.Fprintf(f.IO.Out, "%-25s %-25s %s\n", "STREAM", "LAST SYNC", "RECORDS")
+				fmt.Fprintf(f.IO.Out, "%s\n", strings.Repeat("-", 65))
+
+				for name, ss := range state.Streams {
+					lastSync := "never"
+					if !ss.LastSync.IsZero() {
+						lastSync = ss.LastSync.Format(time.RFC3339)
+					}
+					fmt.Fprintf(f.IO.Out, "%-25s %-25s %d\n", name, lastSync, ss.RecordsSynced)
+				}
 			}
 
 			return nil
@@ -157,6 +227,22 @@ func newSyncStatusCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+// findTenantStateFiles finds all state files matching the base pattern.
+// e.g. base ".xero-sync-state.json" finds ".xero-sync-state-*.json"
+func findTenantStateFiles(base string) []string {
+	ext := filepath.Ext(base)
+	prefix := strings.TrimSuffix(base, ext)
+	pattern := prefix + "-*" + ext
+	matches, _ := filepath.Glob(pattern)
+	if len(matches) == 0 {
+		// Try the base file itself (pre-multi-tenant state)
+		if _, err := os.Stat(base); err == nil {
+			return []string{base}
+		}
+	}
+	return matches
+}
+
 func newSyncResetCmd(f *cmdutil.Factory) *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset [stream]",
@@ -164,12 +250,18 @@ func newSyncResetCmd(f *cmdutil.Factory) *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configFile, _ := cmd.Parent().Flags().GetString("config-file")
-			stateFile := ".xero-sync-state.json"
-
 			syncCfg, err := syncpkg.LoadSyncConfig(configFile)
-			if err == nil {
-				stateFile = syncCfg.Sync.StateFile
+			if err != nil {
+				syncCfg = &syncpkg.SyncConfig{
+					Sync: syncpkg.SyncSettings{StateFile: ".xero-sync-state.json"},
+				}
 			}
+
+			tenantID, err := resolveTenantID(cmd, f)
+			if err != nil {
+				return err
+			}
+			stateFile := tenantStateFile(syncCfg.Sync.StateFile, tenantID)
 
 			state, err := syncpkg.LoadState(stateFile)
 			if err != nil {
