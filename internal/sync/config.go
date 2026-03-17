@@ -22,8 +22,8 @@ type DestinationConfig struct {
 type SyncSettings struct {
 	Mode              string `toml:"mode"`
 	StateFile         string `toml:"state_file"`
-	Concurrency       int    `toml:"concurrency"`
-	RequestsPerMinute int    `toml:"requests_per_minute"`
+	Concurrency       int    `toml:"concurrency"`        // reserved for future use
+	RequestsPerMinute int    `toml:"requests_per_minute"` // reserved for future use
 	DailyBudget       int    `toml:"daily_budget"`
 }
 

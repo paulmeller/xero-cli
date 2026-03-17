@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -93,6 +93,22 @@ func (e *Engine) syncStream(ctx context.Context, sc StreamConfig) error {
 		params.Set("where", sc.Where)
 	}
 
+	// For full_refresh, truncate the destination before writing
+	if sc.SyncMode == "full_refresh" {
+		type truncater interface {
+			TruncateStream(stream string) error
+		}
+		if t, ok := e.dest.(truncater); ok {
+			destName := sc.Name
+			if sc.DestinationTable != "" {
+				destName = sc.DestinationTable
+			}
+			if err := t.TruncateStream(destName); err != nil {
+				return fmt.Errorf("truncate failed: %w", err)
+			}
+		}
+	}
+
 	if e.dryRun {
 		fmt.Fprintf(e.errOut, " [dry-run] would fetch %s\n", meta.APIPath)
 		return nil
@@ -110,10 +126,6 @@ func (e *Engine) syncStream(ctx context.Context, sc StreamConfig) error {
 		data, err := e.client.Get(ctx, meta.APIPath, params)
 		e.apiCalls++
 		if err != nil {
-			// 304 Not Modified is not an error — just means no new data
-			if strings.Contains(err.Error(), "304") {
-				break
-			}
 			return err
 		}
 
@@ -207,9 +219,14 @@ func (e *Engine) orderedStreams(filter []string) []StreamConfig {
 			delete(enabledMap, name)
 		}
 	}
-	// Add any remaining streams not in priority list
-	for _, sc := range enabledMap {
-		result = append(result, sc)
+	// Add any remaining streams not in priority list (sorted for determinism)
+	remaining := make([]string, 0, len(enabledMap))
+	for name := range enabledMap {
+		remaining = append(remaining, name)
+	}
+	sort.Strings(remaining)
+	for _, name := range remaining {
+		result = append(result, enabledMap[name])
 	}
 
 	return result

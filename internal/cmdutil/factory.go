@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -29,12 +30,17 @@ type Factory struct {
 	Formatter          func(format string) output.Formatter
 	IO                 *IOStreams
 	TenantID           func(cmd *cobra.Command) (string, error)
+	NoColor            bool
+	Timeout            time.Duration
 }
 
 // BindTokenFlag should be called from the root command's PersistentPreRunE.
-// When --token is set, it overrides f.APIClient to use the external token.
+// When --token or XERO_ACCESS_TOKEN is set, it overrides f.APIClient to use the external token.
 func BindTokenFlag(cmd *cobra.Command, f *Factory) {
 	token, _ := cmd.Root().PersistentFlags().GetString("token")
+	if token == "" {
+		token = os.Getenv("XERO_ACCESS_TOKEN")
+	}
 	if token == "" {
 		return
 	}
@@ -90,7 +96,8 @@ func NewFactory() *Factory {
 		case "tsv":
 			return &output.TSVFormatter{}
 		default:
-			return output.NewTableFormatter(ios.Out, ios.IsTTY)
+			color := ios.IsTTY && !f.NoColor
+			return output.NewTableFormatter(ios.Out, color)
 		}
 	}
 

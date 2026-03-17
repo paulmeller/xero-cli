@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paulmeller/xero-cli/internal/api"
 	"github.com/paulmeller/xero-cli/internal/cmdutil"
 )
 
@@ -31,6 +33,14 @@ Enable shell completions: xero completion --help`,
 		SilenceUsage:  true,
 		Version:       Version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// Wire --no-color
+			if noColor, _ := cmd.Root().PersistentFlags().GetBool("no-color"); noColor {
+				f.NoColor = true
+			}
+			// Wire --timeout
+			if t, _ := cmd.Root().PersistentFlags().GetInt("timeout"); t > 0 {
+				f.Timeout = time.Duration(t) * time.Second
+			}
 			cmdutil.BindTokenFlag(cmd, f)
 		},
 	}
@@ -94,6 +104,10 @@ Enable shell completions: xero completion --help`,
 			return silentErr.Code
 		}
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		var xerr *api.XeroError
+		if errors.As(err, &xerr) {
+			return xerr.ExitCode()
+		}
 		return cmdutil.ExitError
 	}
 

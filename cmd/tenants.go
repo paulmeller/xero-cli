@@ -13,6 +13,7 @@ import (
 	"github.com/paulmeller/xero-cli/internal/api"
 	"github.com/paulmeller/xero-cli/internal/auth"
 	"github.com/paulmeller/xero-cli/internal/cmdutil"
+	"github.com/paulmeller/xero-cli/internal/config"
 	"github.com/paulmeller/xero-cli/internal/output"
 )
 
@@ -88,11 +89,6 @@ func newTenantsSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 		Short: "Set the active tenant",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := f.Config()
-			if err != nil {
-				return err
-			}
-
 			var tenantID string
 
 			if len(args) > 0 {
@@ -141,8 +137,10 @@ func newTenantsSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 				fmt.Fprintf(f.IO.ErrOut, "Matched: %s\n", matches[0].Get("tenantName").String())
 			}
 
-			cfg.ActiveTenant = tenantID
-			if err := cfg.Save(); err != nil {
+			// Use LoadFile to avoid baking env-var secrets into the config file
+			fileCfg, _ := config.LoadFile("")
+			fileCfg.ActiveTenant = tenantID
+			if err := fileCfg.Save(); err != nil {
 				return fmt.Errorf("failed to save config: %w", err)
 			}
 

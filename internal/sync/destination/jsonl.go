@@ -9,15 +9,35 @@ import (
 )
 
 type JSONLDestination struct {
-	outputDir string
-	files     map[string]*os.File
+	outputDir  string
+	files      map[string]*os.File
+	truncated  map[string]bool // tracks which streams have been truncated for full_refresh
 }
 
 func NewJSONLDestination(outputDir string) *JSONLDestination {
 	return &JSONLDestination{
 		outputDir: outputDir,
 		files:     make(map[string]*os.File),
+		truncated: make(map[string]bool),
 	}
+}
+
+// TruncateStream truncates the JSONL file for a stream (used before full_refresh writes).
+func (d *JSONLDestination) TruncateStream(stream string) error {
+	if d.truncated[stream] {
+		return nil
+	}
+	// Close existing file handle if open
+	if f, ok := d.files[stream]; ok {
+		f.Close()
+		delete(d.files, stream)
+	}
+	path := filepath.Join(d.outputDir, stream+".jsonl")
+	if err := os.Truncate(path, 0); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	d.truncated[stream] = true
+	return nil
 }
 
 func (d *JSONLDestination) Init(ctx context.Context) error {

@@ -377,14 +377,7 @@ func NewHistoryCmd(f *Factory, def ResourceDef) *cobra.Command {
 
 			items := gjson.ParseBytes(data).Get("HistoryRecords")
 
-			histCols := []output.Column{
-				{Header: "DATE", Path: "DateUTCString", Format: "date"},
-				{Header: "USER", Path: "User"},
-				{Header: "CHANGES", Path: "Changes"},
-				{Header: "DETAILS", Path: "Details"},
-			}
-
-			return formatter.FormatList(f.IO.Out, items, histCols)
+			return formatter.FormatList(f.IO.Out, items, HistoryColumns)
 		},
 	}
 }
@@ -588,7 +581,8 @@ func tryListCache(f *Factory, cmd *cobra.Command, def ResourceDef) ([]byte, bool
 	stateFile := syncpkg.TenantStateFile(".xero-sync-state.json", tenantID)
 	outputDir := syncpkg.TenantOutputDir("./xero_data", tenantID)
 
-	jsonlPath, fresh := cache.IsFresh(stateFile, outputDir, streamName, ttl)
+	lastSync := loadStreamLastSync(stateFile, streamName)
+	jsonlPath, fresh := cache.IsFresh(lastSync, outputDir, streamName, ttl)
 	if !fresh {
 		return nil, false
 	}
@@ -624,7 +618,8 @@ func tryGetCache(f *Factory, cmd *cobra.Command, def ResourceDef, id string) ([]
 	stateFile := syncpkg.TenantStateFile(".xero-sync-state.json", tenantID)
 	outputDir := syncpkg.TenantOutputDir("./xero_data", tenantID)
 
-	jsonlPath, fresh := cache.IsFresh(stateFile, outputDir, streamName, ttl)
+	lastSync := loadStreamLastSync(stateFile, streamName)
+	jsonlPath, fresh := cache.IsFresh(lastSync, outputDir, streamName, ttl)
 	if !fresh {
 		return nil, false
 	}
@@ -635,6 +630,19 @@ func tryGetCache(f *Factory, cmd *cobra.Command, def ResourceDef, id string) ([]
 	}
 
 	return data, true
+}
+
+// loadStreamLastSync loads the last sync time for a stream from the state file.
+func loadStreamLastSync(stateFile, streamName string) time.Time {
+	state, err := syncpkg.LoadState(stateFile)
+	if err != nil {
+		return time.Time{}
+	}
+	ss, ok := state.Streams[streamName]
+	if !ok {
+		return time.Time{}
+	}
+	return ss.LastSync
 }
 
 // TryListCache is the exported version for use by custom commands (invoices, contacts).
@@ -665,4 +673,38 @@ func ApplyClientFlags(cmd *cobra.Command, client *api.Client, f *Factory) {
 	if tenant != "" {
 		client.SetTenantID(tenant)
 	}
+
+	if f.Timeout > 0 {
+		client.SetTimeout(f.Timeout)
+	}
+}
+
+// HistoryColumns is the standard set of columns for history records.
+var HistoryColumns = []output.Column{
+	{Header: "DATE", Path: "DateUTCString", Format: "date"},
+	{Header: "USER", Path: "User"},
+	{Header: "CHANGES", Path: "Changes"},
+	{Header: "DETAILS", Path: "Details"},
+}
+
+// DetectContentType returns the MIME type for a file path based on extension.
+func DetectContentType(path string) string {
+	return detectContentType(path)
+}
+
+// OutputResult formats a Xero API result that wraps items in a JSON key.
+// Handles both single-item and multi-item responses.
+func OutputResult(f *Factory, cmd *cobra.Command, result json.RawMessage, jsonKey string, columns []output.Column) error {
+	format := GetOutputFormat(cmd, f.IO)
+	formatter := f.Formatter(format)
+
+	parsed := gjson.ParseBytes(result)
+	items := parsed.Get(jsonKey)
+	if items.IsArray() && len(items.Array()) == 1 {
+		return formatter.FormatOne(f.IO.Out, items.Array()[0], columns)
+	}
+	if items.IsArray() {
+		return formatter.FormatList(f.IO.Out, items, columns)
+	}
+	return formatter.FormatOne(f.IO.Out, parsed, columns)
 }

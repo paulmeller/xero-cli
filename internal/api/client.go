@@ -31,6 +31,7 @@ type Client struct {
 	verbose  bool
 	dryRun   bool
 	errOut   io.Writer
+	timeout  time.Duration
 }
 
 type xeroTransport struct {
@@ -224,6 +225,12 @@ func (c *Client) SetDryRun(dryRun bool) {
 	if t, ok := c.http.Transport.(*xeroTransport); ok {
 		t.dryRun = dryRun
 	}
+}
+
+// SetTimeout sets the request timeout.
+func (c *Client) SetTimeout(d time.Duration) {
+	c.timeout = d
+	c.http.Timeout = d
 }
 
 // SetTenantID overrides the tenant ID.

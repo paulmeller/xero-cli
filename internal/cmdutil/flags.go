@@ -36,6 +36,25 @@ func BuildListParams(cmd *cobra.Command) url.Values {
 	return params
 }
 
+// GetPageSize returns the effective page size from flag or config.
+func GetPageSize(cmd *cobra.Command, f *Factory) int {
+	if cmd.Root().PersistentFlags().Changed("page-size") {
+		v, _ := cmd.Root().PersistentFlags().GetInt("page-size")
+		if v > 100 {
+			v = 100
+		}
+		return v
+	}
+	if cfg, err := f.Config(); err == nil && cfg.Defaults.PageSize > 0 {
+		ps := cfg.Defaults.PageSize
+		if ps > 100 {
+			ps = 100
+		}
+		return ps
+	}
+	return 100
+}
+
 // ConfirmAction prompts the user for confirmation unless --force or --no-prompt is set.
 // With --no-prompt and no --force, it returns false (fails safely for agents).
 func ConfirmAction(ios *IOStreams, msg string, cmd *cobra.Command) bool {
@@ -71,7 +90,7 @@ func HasChangedFilterFlags(cmd *cobra.Command) bool {
 	return false
 }
 
-// GetOutputFormat determines the output format from flags or TTY detection.
+// GetOutputFormat determines the output format from flags, config, or TTY detection.
 func GetOutputFormat(cmd *cobra.Command, ios *IOStreams) string {
 	format, _ := cmd.Root().PersistentFlags().GetString("output")
 	if format != "" {
@@ -79,6 +98,24 @@ func GetOutputFormat(cmd *cobra.Command, ios *IOStreams) string {
 	}
 	if !ios.IsTTY {
 		return "json"
+	}
+	return "table"
+}
+
+// GetOutputFormatWithConfig determines the output format from flags, config defaults, or TTY detection.
+func GetOutputFormatWithConfig(cmd *cobra.Command, f *Factory) string {
+	// Explicit flag takes priority
+	if cmd.Root().PersistentFlags().Changed("output") {
+		format, _ := cmd.Root().PersistentFlags().GetString("output")
+		return format
+	}
+	// Non-TTY always defaults to JSON regardless of config
+	if !f.IO.IsTTY {
+		return "json"
+	}
+	// Config default
+	if cfg, err := f.Config(); err == nil && cfg.Defaults.Output != "" {
+		return cfg.Defaults.Output
 	}
 	return "table"
 }

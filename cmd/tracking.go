@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -304,5 +303,3 @@ func newTrackingOptionDeleteCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-// Unused import guard
-var _ json.RawMessage

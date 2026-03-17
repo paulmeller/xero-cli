@@ -368,14 +368,7 @@ func newContactsHistoryCmd(f *cmdutil.Factory) *cobra.Command {
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 			formatter := f.Formatter(format)
 			items := gjson.ParseBytes(data).Get("HistoryRecords")
-
-			histCols := []output.Column{
-				{Header: "DATE", Path: "DateUTCString", Format: "date"},
-				{Header: "USER", Path: "User"},
-				{Header: "CHANGES", Path: "Changes"},
-				{Header: "DETAILS", Path: "Details"},
-			}
-			return formatter.FormatList(f.IO.Out, items, histCols)
+			return formatter.FormatList(f.IO.Out, items, cmdutil.HistoryColumns)
 		},
 	}
 }
@@ -402,18 +395,7 @@ func newContactsAttachCmd(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("cannot read file %s: %w", filePath, err)
 			}
 
-			contentType := "application/octet-stream"
-			ext := strings.ToLower(filepath.Ext(filePath))
-			switch ext {
-			case ".pdf":
-				contentType = "application/pdf"
-			case ".png":
-				contentType = "image/png"
-			case ".jpg", ".jpeg":
-				contentType = "image/jpeg"
-			case ".csv":
-				contentType = "text/csv"
-			}
+			contentType := cmdutil.DetectContentType(filePath)
 
 			result, err := client.PutAttachment(cmd.Context(), path, data, contentType)
 			if err != nil {
@@ -433,18 +415,7 @@ func newContactsAttachCmd(f *cmdutil.Factory) *cobra.Command {
 }
 
 func outputContactResult(f *cmdutil.Factory, cmd *cobra.Command, result json.RawMessage) error {
-	format := cmdutil.GetOutputFormat(cmd, f.IO)
-	formatter := f.Formatter(format)
-
-	parsed := gjson.ParseBytes(result)
-	items := parsed.Get("Contacts")
-	if items.IsArray() && len(items.Array()) == 1 {
-		return formatter.FormatOne(f.IO.Out, items.Array()[0], contactColumns)
-	}
-	if items.IsArray() {
-		return formatter.FormatList(f.IO.Out, items, contactColumns)
-	}
-	return formatter.FormatOne(f.IO.Out, parsed, contactColumns)
+	return cmdutil.OutputResult(f, cmd, result, "Contacts", contactColumns)
 }
 
 func appendWhere(existing, clause string) string {

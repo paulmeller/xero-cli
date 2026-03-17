@@ -22,15 +22,22 @@ func (f *CSVFormatter) FormatList(w io.Writer, items gjson.Result, columns []Col
 	}
 
 	// Rows
+	var writeErr error
 	items.ForEach(func(_, item gjson.Result) bool {
 		row := make([]string, len(columns))
 		for i, col := range columns {
 			val := item.Get(col.Path)
 			row[i] = convertXeroDate(val.String())
 		}
-		cw.Write(row)
+		if err := cw.Write(row); err != nil {
+			writeErr = err
+			return false
+		}
 		return true
 	})
+	if writeErr != nil {
+		return writeErr
+	}
 
 	cw.Flush()
 	return cw.Error()

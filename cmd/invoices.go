@@ -522,14 +522,7 @@ func newInvoicesHistoryCmd(f *cmdutil.Factory) *cobra.Command {
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 			formatter := f.Formatter(format)
 			items := gjson.ParseBytes(data).Get("HistoryRecords")
-
-			histCols := []output.Column{
-				{Header: "DATE", Path: "DateUTCString", Format: "date"},
-				{Header: "USER", Path: "User"},
-				{Header: "CHANGES", Path: "Changes"},
-				{Header: "DETAILS", Path: "Details"},
-			}
-			return formatter.FormatList(f.IO.Out, items, histCols)
+			return formatter.FormatList(f.IO.Out, items, cmdutil.HistoryColumns)
 		},
 	}
 }
@@ -555,18 +548,7 @@ func newInvoicesAttachCmd(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("cannot read file %s: %w", filePath, err)
 			}
 
-			contentType := "application/octet-stream"
-			ext := strings.ToLower(filepath.Ext(filePath))
-			switch ext {
-			case ".pdf":
-				contentType = "application/pdf"
-			case ".png":
-				contentType = "image/png"
-			case ".jpg", ".jpeg":
-				contentType = "image/jpeg"
-			case ".csv":
-				contentType = "text/csv"
-			}
+			contentType := cmdutil.DetectContentType(filePath)
 
 			result, err := client.PutAttachment(cmd.Context(), path, data, contentType)
 			if err != nil {
@@ -644,18 +626,7 @@ func parseLineItem(s string) (api.LineItem, error) {
 }
 
 func outputInvoiceResult(f *cmdutil.Factory, cmd *cobra.Command, result json.RawMessage) error {
-	format := cmdutil.GetOutputFormat(cmd, f.IO)
-	formatter := f.Formatter(format)
-
-	parsed := gjson.ParseBytes(result)
-	items := parsed.Get("Invoices")
-	if items.IsArray() && len(items.Array()) == 1 {
-		return formatter.FormatOne(f.IO.Out, items.Array()[0], invoiceColumns)
-	}
-	if items.IsArray() {
-		return formatter.FormatList(f.IO.Out, items, invoiceColumns)
-	}
-	return formatter.FormatOne(f.IO.Out, parsed, invoiceColumns)
+	return cmdutil.OutputResult(f, cmd, result, "Invoices", invoiceColumns)
 }
 
 // xeroDateLiteral converts "2026-01-15" to "2026,1,15" for Xero where clauses.

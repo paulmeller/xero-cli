@@ -47,11 +47,6 @@ func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 		return s.cached, nil
 	}
 
-	// If we have a cached token with refresh token, create a proper token source
-	if s.cached != nil && s.cached.RefreshToken != "" && s.underlying != nil {
-		// The underlying source should use our cached token for refresh
-	}
-
 	// Get a new token from the underlying source
 	if s.underlying == nil {
 		return nil, fmt.Errorf("no valid token and no token source configured; run 'xero auth login'")

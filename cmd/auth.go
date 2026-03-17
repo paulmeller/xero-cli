@@ -15,6 +15,7 @@ import (
 	"github.com/paulmeller/xero-cli/internal/api"
 	"github.com/paulmeller/xero-cli/internal/auth"
 	"github.com/paulmeller/xero-cli/internal/cmdutil"
+	"github.com/paulmeller/xero-cli/internal/config"
 	"github.com/paulmeller/xero-cli/internal/output"
 )
 
@@ -102,8 +103,10 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 			if len(arr) == 1 {
 				tenantID := arr[0].Get("tenantId").String()
 				tenantName := arr[0].Get("tenantName").String()
-				cfg.ActiveTenant = tenantID
-				if err := cfg.Save(); err != nil {
+				// Use LoadFile to avoid baking env-var secrets into the config file
+				fileCfg, _ := config.LoadFile("")
+				fileCfg.ActiveTenant = tenantID
+				if err := fileCfg.Save(); err != nil {
 					fmt.Fprintf(f.IO.ErrOut, "Warning: could not save tenant to config: %v\n", err)
 				}
 				fmt.Fprintf(f.IO.ErrOut, "Active tenant: %s (%s)\n", tenantName, tenantID)
