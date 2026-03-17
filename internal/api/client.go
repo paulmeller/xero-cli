@@ -197,6 +197,17 @@ func NewClientFromConfig(cfg *config.Config) (*Client, error) {
 	return NewClient(httpClient, cfg.ActiveTenant, false, false, io.Discard), nil
 }
 
+// NewClientFromToken creates a Client using an externally-provided access token.
+// The token is used as-is with no refresh capability.
+func NewClientFromToken(token string, tenantID string) *Client {
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{
+		AccessToken: token,
+		TokenType:   "Bearer",
+	})
+	httpClient := oauth2.NewClient(context.Background(), tokenSource)
+	return NewClient(httpClient, tenantID, false, false, io.Discard)
+}
+
 // SetVerbose enables verbose logging.
 func (c *Client) SetVerbose(verbose bool, errOut io.Writer) {
 	c.verbose = verbose

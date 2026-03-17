@@ -30,6 +30,9 @@ Enable shell completions: xero completion --help`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       Version,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			cmdutil.BindTokenFlag(cmd, f)
+		},
 	}
 
 	// Global persistent flags
@@ -44,6 +47,7 @@ Enable shell completions: xero completion --help`,
 	rootCmd.PersistentFlags().String("modified-since", "", "Only return items modified after this date (ISO 8601)")
 	rootCmd.PersistentFlags().String("where", "", "Filter expression (Xero where clause)")
 	rootCmd.PersistentFlags().String("order", "", "Sort expression")
+	rootCmd.PersistentFlags().String("token", "", "Use external access token (bypasses stored token)")
 	rootCmd.PersistentFlags().Bool("dry-run", false, "Print requests without sending them")
 	rootCmd.PersistentFlags().String("config", "", "Path to config file")
 	rootCmd.PersistentFlags().Int("timeout", 30, "Request timeout in seconds")

@@ -16,7 +16,7 @@ Thumbs.db
 xero_data/
 *.duckdb
 *.duckdb.wal
-.xero-sync-state.json
+.xero-sync-state*.json
 
 # Config (contains secrets)
 sync.toml
