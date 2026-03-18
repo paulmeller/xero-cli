@@ -46,7 +46,10 @@ func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, _ := f.Config()
+			cfg, err := f.Config()
+			if err != nil {
+				return err
+			}
 			conn := cfg.ActiveConn()
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 
@@ -138,11 +141,17 @@ func newTenantsSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 				fmt.Fprintf(f.IO.ErrOut, "Matched: %s\n", matches[0].Get("tenantName").String())
 			}
 
-			cfg, _ := f.Config()
+			cfg, err := f.Config()
+			if err != nil {
+				return err
+			}
 			connName := cfg.ActiveConnectionName()
 
 			// Use LoadFile to avoid baking env-var secrets into the config file
-			fileCfg, _ := config.LoadFileWithConnection("", connName)
+			fileCfg, err := config.LoadFileWithConnection("", connName)
+			if err != nil {
+				return err
+			}
 			fileCfg.SetActiveTenant(tenantID)
 			if err := fileCfg.Save(); err != nil {
 				return fmt.Errorf("failed to save config: %w", err)

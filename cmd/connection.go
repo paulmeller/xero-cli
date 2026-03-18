@@ -55,7 +55,7 @@ func newConnectionListCmd(f *cmdutil.Factory) *cobra.Command {
 
 			var rows []map[string]any
 			for _, name := range names {
-				conn := cfg.Connections[name]
+				conn, _ := cfg.GetConnection(name)
 				marker := ""
 				if name == activeConnName {
 					marker = "*"
@@ -63,7 +63,7 @@ func newConnectionListCmd(f *cmdutil.Factory) *cobra.Command {
 				rows = append(rows, map[string]any{
 					"_active":   marker,
 					"name":      name,
-					"client_id": redactSecret(conn.ClientID),
+					"client_id": conn.ClientID,
 					"grant":     conn.GrantType,
 					"tenant":    conn.ActiveTenant,
 				})
@@ -271,7 +271,7 @@ func newConnectionCurrentCmd(f *cmdutil.Factory) *cobra.Command {
 			if format == "json" {
 				data, _ := json.MarshalIndent(map[string]string{
 					"connection": connName,
-					"client_id":  redactSecret(conn.ClientID),
+					"client_id":  conn.ClientID,
 					"tenant":     conn.ActiveTenant,
 				}, "", "  ")
 				fmt.Fprintln(f.IO.Out, string(data))

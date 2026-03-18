@@ -130,6 +130,20 @@ func (c *Config) SetActiveCredentials(clientID, clientSecret string) {
 	conn.ClientSecret = clientSecret
 }
 
+// SetActiveGrantType sets the grant type on the active connection,
+// creating the connection entry if it doesn't exist.
+func (c *Config) SetActiveGrantType(grantType string) {
+	conn := c.ensureActiveConn()
+	conn.GrantType = grantType
+}
+
+// SetActiveRedirectURI sets the redirect URI on the active connection,
+// creating the connection entry if it doesn't exist.
+func (c *Config) SetActiveRedirectURI(uri string) {
+	conn := c.ensureActiveConn()
+	conn.RedirectURI = uri
+}
+
 // ensureActiveConn returns the active connection entry, creating it if needed.
 func (c *Config) ensureActiveConn() *Connection {
 	name := c.ActiveConnectionName()
@@ -320,10 +334,22 @@ func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 	}
 
 	// Apply connection override (flag takes precedence over env)
-	if connectionOverride != "" {
-		cfg.ActiveConnection = connectionOverride
-	} else if v := os.Getenv("XERO_CONNECTION"); v != "" {
-		cfg.ActiveConnection = v
+	override := connectionOverride
+	if override == "" {
+		override = os.Getenv("XERO_CONNECTION")
+	}
+	if override != "" {
+		// Validate that the named connection exists (env vars may still create it below)
+		if override != "default" && override != "" {
+			if cfg.Connections[override] == nil {
+				return nil, fmt.Errorf("connection %q not found", override)
+			}
+		}
+		if override == "default" {
+			cfg.ActiveConnection = ""
+		} else {
+			cfg.ActiveConnection = override
+		}
 	}
 
 	// Env var overlays — applied to the active connection in-memory.
