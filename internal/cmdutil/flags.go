@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // BuildListParams extracts common list parameters from command flags.
@@ -75,6 +76,42 @@ func ConfirmAction(ios *IOStreams, msg string, cmd *cobra.Command) bool {
 		return answer == "y" || answer == "yes"
 	}
 	return false
+}
+
+// PromptString prompts the user for a string value on stderr and reads from stdin.
+func PromptString(ios *IOStreams, prompt string) (string, error) {
+	fmt.Fprintf(ios.ErrOut, "%s", prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text()), nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("no input")
+}
+
+// PromptSecret prompts the user for a secret value (input is masked) on stderr.
+func PromptSecret(ios *IOStreams, prompt string) (string, error) {
+	fmt.Fprintf(ios.ErrOut, "%s", prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(ios.ErrOut) // newline after masked input
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// PromptConfirmDefault prompts for confirmation with a default of yes.
+// Returns true if user presses enter or types y/yes.
+func PromptConfirmDefault(ios *IOStreams, prompt string) bool {
+	fmt.Fprintf(ios.ErrOut, "%s [Y/n]: ", prompt)
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		return answer == "" || answer == "y" || answer == "yes"
+	}
+	return true
 }
 
 // HasChangedFilterFlags returns true if any server-side filter flags have been set.
