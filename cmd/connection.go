@@ -145,6 +145,10 @@ func newConnectionAddCmd(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("cannot add a connection named \"default\"; the default connection uses the top-level config fields")
 			}
 
+			if err := config.ValidateConnectionName(name); err != nil {
+				return err
+			}
+
 			clientID, _ := cmd.Flags().GetString("client-id")
 			clientSecret, _ := cmd.Flags().GetString("client-secret")
 			grantType, _ := cmd.Flags().GetString("grant-type")
@@ -190,7 +194,9 @@ func newConnectionAddCmd(f *cmdutil.Factory) *cobra.Command {
 				ClientSecret: clientSecret,
 				GrantType:    grantType,
 			}
-			cfg.SetConnection(name, conn)
+			if err := cfg.SetConnection(name, conn); err != nil {
+				return err
+			}
 
 			if switchTo {
 				cfg.ActiveConnection = name
@@ -267,6 +273,12 @@ func newConnectionSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
+			if name != "default" {
+				if err := config.ValidateConnectionName(name); err != nil {
+					return err
+				}
+			}
+
 			configPath, _ := cmd.Root().PersistentFlags().GetString("config")
 			cfg, err := config.LoadFile(configPath)
 			if err != nil {
@@ -275,6 +287,9 @@ func newConnectionSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 
 			// Validate that the connection exists
 			if name == "default" {
+				if cfg.ClientID == "" {
+					return fmt.Errorf("no default connection configured; set client_id in config.toml first")
+				}
 				// Switch back to flat fields
 				cfg.ActiveConnection = ""
 			} else {

@@ -4,9 +4,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 )
+
+var validConnectionName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// ValidateConnectionName checks that a connection name is safe for use
+// in file paths, keyring keys, and TOML map keys.
+func ValidateConnectionName(name string) error {
+	if name == "" {
+		return fmt.Errorf("connection name cannot be empty")
+	}
+	if !validConnectionName.MatchString(name) {
+		return fmt.Errorf("connection name %q is invalid: must be 1-64 alphanumeric characters, hyphens, or underscores, starting with an alphanumeric character", name)
+	}
+	return nil
+}
 
 // Connection holds credentials and settings for a single Xero app connection.
 type Connection struct {
@@ -49,27 +65,31 @@ func (c *Config) ActiveConnectionName() string {
 	return "default"
 }
 
-// ActiveConn returns the active connection's settings.
-// If a named connection is active and exists in the map, that entry is returned.
+// ActiveConn returns a copy of the active connection's settings.
+// If a named connection is active and exists in the map, a copy of that entry
+// is returned with defaults filled in from the top-level config.
 // Otherwise, a Connection is synthesized from the legacy flat fields.
+// The returned Connection is always a fresh copy — safe to mutate without
+// affecting the stored config.
 func (c *Config) ActiveConn() *Connection {
 	if c.ActiveConnection != "" && c.Connections != nil {
 		if conn, ok := c.Connections[c.ActiveConnection]; ok {
-			// Fill in defaults from the top-level config for fields not set on the connection
-			if len(conn.Scopes) == 0 {
-				conn.Scopes = c.Scopes
+			// Return a copy with defaults filled in
+			cp := *conn
+			if len(cp.Scopes) == 0 {
+				cp.Scopes = append([]string(nil), c.Scopes...)
 			}
-			if conn.RedirectURI == "" {
-				conn.RedirectURI = c.RedirectURI
+			if cp.RedirectURI == "" {
+				cp.RedirectURI = c.RedirectURI
 			}
-			return conn
+			return &cp
 		}
 	}
 	// Synthesize from flat fields (backward compat)
 	return &Connection{
 		ClientID:     c.ClientID,
 		ClientSecret: c.ClientSecret,
-		Scopes:       c.Scopes,
+		Scopes:       append([]string(nil), c.Scopes...),
 		RedirectURI:  c.RedirectURI,
 		GrantType:    c.GrantType,
 		ActiveTenant: c.ActiveTenant,
@@ -101,11 +121,16 @@ func (c *Config) SetActiveCredentials(clientID, clientSecret string) {
 }
 
 // SetConnection adds or updates a named connection.
-func (c *Config) SetConnection(name string, conn *Connection) {
+// Returns an error if the name is invalid.
+func (c *Config) SetConnection(name string, conn *Connection) error {
+	if err := ValidateConnectionName(name); err != nil {
+		return err
+	}
 	if c.Connections == nil {
 		c.Connections = make(map[string]*Connection)
 	}
 	c.Connections[name] = conn
+	return nil
 }
 
 // RemoveConnection removes a named connection from the map.
@@ -120,27 +145,32 @@ func (c *Config) RemoveConnection(name string) error {
 	return nil
 }
 
-// ConnectionNames returns the names of all configured connections.
-// Includes "default" if flat fields have a client_id set.
+// ConnectionNames returns the sorted names of all configured connections.
+// Includes "default" (listed first) if flat fields have a client_id set.
 func (c *Config) ConnectionNames() []string {
 	var names []string
 	if c.ClientID != "" {
 		names = append(names, "default")
 	}
+	named := make([]string, 0, len(c.Connections))
 	for name := range c.Connections {
-		names = append(names, name)
+		named = append(named, name)
 	}
+	sort.Strings(named)
+	names = append(names, named...)
 	return names
 }
 
-// GetConnection returns a connection by name. "default" returns the synthesized flat-field connection.
+// GetConnection returns a copy of a connection by name.
+// "default" returns the synthesized flat-field connection.
+// The returned Connection is always a fresh copy — safe to mutate.
 func (c *Config) GetConnection(name string) (*Connection, bool) {
 	if name == "default" || name == "" {
 		if c.ClientID != "" {
 			return &Connection{
 				ClientID:     c.ClientID,
 				ClientSecret: c.ClientSecret,
-				Scopes:       c.Scopes,
+				Scopes:       append([]string(nil), c.Scopes...),
 				RedirectURI:  c.RedirectURI,
 				GrantType:    c.GrantType,
 				ActiveTenant: c.ActiveTenant,
@@ -149,8 +179,10 @@ func (c *Config) GetConnection(name string) (*Connection, bool) {
 		return nil, false
 	}
 	if c.Connections != nil {
-		conn, ok := c.Connections[name]
-		return conn, ok
+		if conn, ok := c.Connections[name]; ok {
+			cp := *conn
+			return &cp, true
+		}
 	}
 	return nil, false
 }
@@ -249,12 +281,18 @@ func LoadFile(path string) (*Config, error) {
 }
 
 // LoadFileWithConnection loads config from file and sets the active connection override.
+// Returns an error if the override names a connection that does not exist.
 func LoadFileWithConnection(path, connectionOverride string) (*Config, error) {
 	cfg, err := LoadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	if connectionOverride != "" {
+		if connectionOverride != "default" {
+			if cfg.Connections == nil || cfg.Connections[connectionOverride] == nil {
+				return nil, fmt.Errorf("connection %q not found", connectionOverride)
+			}
+		}
 		cfg.ActiveConnection = connectionOverride
 	}
 	return cfg, nil
@@ -279,7 +317,10 @@ func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 		cfg.ActiveConnection = v
 	}
 
-	// Env var overlays apply to the active connection
+	// Env var overlays apply to the active connection.
+	// ActiveConn() returns a copy, so mutations here are safe and do not
+	// bleed into the stored config. We apply env overrides onto the copy,
+	// then write the values back to the appropriate storage location.
 	conn := cfg.ActiveConn()
 	if v := os.Getenv("XERO_CLIENT_ID"); v != "" {
 		conn.ClientID = v
@@ -294,12 +335,20 @@ func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 		conn.GrantType = v
 	}
 
-	// Write back to the flat fields if using default connection (backward compat)
+	// Write env-overlaid values back so callers see them via the flat fields
+	// or the connection map as appropriate.
 	if cfg.ActiveConnectionName() == "default" {
 		cfg.ClientID = conn.ClientID
 		cfg.ClientSecret = conn.ClientSecret
 		cfg.ActiveTenant = conn.ActiveTenant
 		cfg.GrantType = conn.GrantType
+	} else if cfg.Connections != nil {
+		if stored, ok := cfg.Connections[cfg.ActiveConnection]; ok {
+			stored.ClientID = conn.ClientID
+			stored.ClientSecret = conn.ClientSecret
+			stored.ActiveTenant = conn.ActiveTenant
+			stored.GrantType = conn.GrantType
+		}
 	}
 
 	if v := os.Getenv("XERO_CACHE_TTL"); v != "" {
@@ -330,6 +379,12 @@ func (c *Config) Save() error {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("cannot encode config: %w", err)
+	}
+	// Config may contain client_secret — restrict permissions.
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpPath)
