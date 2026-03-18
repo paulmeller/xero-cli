@@ -38,10 +38,12 @@ func newConfigShowCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
+			conn := cfg.ActiveConn()
+			connName := cfg.ActiveConnectionName()
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 
 			if format == "json" {
-				out := configJSON(cfg)
+				out := configJSON(cfg, conn, connName)
 				data, err := json.MarshalIndent(out, "", "  ")
 				if err != nil {
 					return err
@@ -51,12 +53,13 @@ func newConfigShowCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			// Plain key=value output
-			fmt.Fprintf(f.IO.Out, "client_id = %s\n", cfg.ClientID)
-			fmt.Fprintf(f.IO.Out, "client_secret = %s\n", redactSecret(cfg.ClientSecret))
-			fmt.Fprintf(f.IO.Out, "grant_type = %s\n", cfg.GrantType)
-			fmt.Fprintf(f.IO.Out, "redirect_uri = %s\n", cfg.RedirectURI)
-			fmt.Fprintf(f.IO.Out, "active_tenant = %s\n", cfg.ActiveTenant)
-			fmt.Fprintf(f.IO.Out, "scopes = [%d configured]\n", len(cfg.Scopes))
+			fmt.Fprintf(f.IO.Out, "connection = %s\n", connName)
+			fmt.Fprintf(f.IO.Out, "client_id = %s\n", conn.ClientID)
+			fmt.Fprintf(f.IO.Out, "client_secret = %s\n", redactSecret(conn.ClientSecret))
+			fmt.Fprintf(f.IO.Out, "grant_type = %s\n", conn.GrantType)
+			fmt.Fprintf(f.IO.Out, "redirect_uri = %s\n", conn.RedirectURI)
+			fmt.Fprintf(f.IO.Out, "active_tenant = %s\n", conn.ActiveTenant)
+			fmt.Fprintf(f.IO.Out, "scopes = [%d configured]\n", len(conn.Scopes))
 			fmt.Fprintf(f.IO.Out, "defaults.output = %s\n", cfg.Defaults.Output)
 			fmt.Fprintf(f.IO.Out, "defaults.page_size = %d\n", cfg.Defaults.PageSize)
 			fmt.Fprintf(f.IO.Out, "defaults.cache_ttl = %s\n", cfg.Defaults.CacheTTL)
@@ -87,18 +90,31 @@ func newConfigSetCmd(f *cmdutil.Factory) *cobra.Command {
 
 			// Load from file only (no env overlay) to avoid leaking env-var secrets
 			configPath, _ := cmd.Root().PersistentFlags().GetString("config")
-			cfg, err := config.LoadFile(configPath)
+			connName, _ := cmd.Root().PersistentFlags().GetString("connection")
+			cfg, err := config.LoadFileWithConnection(configPath, connName)
 			if err != nil {
 				return err
 			}
 
 			switch key {
 			case "active_tenant":
-				cfg.ActiveTenant = value
+				cfg.SetActiveTenant(value)
 			case "grant_type":
-				cfg.GrantType = value
+				if cfg.ActiveConnectionName() != "default" && cfg.Connections != nil {
+					if conn, ok := cfg.Connections[cfg.ActiveConnection]; ok {
+						conn.GrantType = value
+					}
+				} else {
+					cfg.GrantType = value
+				}
 			case "redirect_uri":
-				cfg.RedirectURI = value
+				if cfg.ActiveConnectionName() != "default" && cfg.Connections != nil {
+					if conn, ok := cfg.Connections[cfg.ActiveConnection]; ok {
+						conn.RedirectURI = value
+					}
+				} else {
+					cfg.RedirectURI = value
+				}
 			case "defaults.output":
 				valid := map[string]bool{"table": true, "json": true, "csv": true, "tsv": true}
 				if !valid[value] {
@@ -159,14 +175,15 @@ func redactSecret(s string) string {
 }
 
 // configJSON builds a JSON-safe representation with the secret redacted.
-func configJSON(cfg *config.Config) map[string]any {
+func configJSON(cfg *config.Config, conn *config.Connection, connName string) map[string]any {
 	return map[string]any{
-		"client_id":     cfg.ClientID,
-		"client_secret": redactSecret(cfg.ClientSecret),
-		"grant_type":    cfg.GrantType,
-		"redirect_uri":  cfg.RedirectURI,
-		"active_tenant": cfg.ActiveTenant,
-		"scopes":        cfg.Scopes,
+		"connection":    connName,
+		"client_id":     conn.ClientID,
+		"client_secret": redactSecret(conn.ClientSecret),
+		"grant_type":    conn.GrantType,
+		"redirect_uri":  conn.RedirectURI,
+		"active_tenant": conn.ActiveTenant,
+		"scopes":        conn.Scopes,
 		"defaults": map[string]any{
 			"output":    cfg.Defaults.Output,
 			"page_size": cfg.Defaults.PageSize,

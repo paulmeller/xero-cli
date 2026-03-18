@@ -44,10 +44,13 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
+			conn := cfg.ActiveConn()
+			connName := cfg.ActiveConnectionName()
+
 			noPrompt, _ := cmd.Root().PersistentFlags().GetBool("no-prompt")
 			canPrompt := f.IO.IsTTY && !noPrompt
 
-			if cfg.ClientID == "" {
+			if conn.ClientID == "" {
 				if !canPrompt {
 					return fmt.Errorf("client ID not configured; set XERO_CLIENT_ID or add client_id to config.toml")
 				}
@@ -59,32 +62,32 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 				if id == "" {
 					return fmt.Errorf("client ID is required")
 				}
-				cfg.ClientID = id
+				conn.ClientID = id
 			}
 
-			if cfg.ClientSecret == "" && canPrompt {
+			if conn.ClientSecret == "" && canPrompt {
 				secret, err := cmdutil.PromptSecret(f.IO, "Enter your Xero Client Secret: ")
 				if err != nil {
 					return fmt.Errorf("failed to read client secret: %w", err)
 				}
 				if secret != "" {
-					cfg.ClientSecret = secret
+					conn.ClientSecret = secret
 				}
 			}
 
 			// Offer to save prompted credentials to config file
-			if canPrompt && (cfg.ClientID != "" || cfg.ClientSecret != "") {
+			if canPrompt && (conn.ClientID != "" || conn.ClientSecret != "") {
 				// Check if these values came from prompting (not already in file/env)
-				fileCfg, _ := config.LoadFile("")
+				fileCfg, _ := config.LoadFileWithConnection("", connName)
+				fileConn := fileCfg.ActiveConn()
 				envID := os.Getenv("XERO_CLIENT_ID")
 				envSecret := os.Getenv("XERO_CLIENT_SECRET")
-				needsSave := (fileCfg.ClientID == "" && envID == "" && cfg.ClientID != "") ||
-					(fileCfg.ClientSecret == "" && envSecret == "" && cfg.ClientSecret != "")
+				needsSave := (fileConn.ClientID == "" && envID == "" && conn.ClientID != "") ||
+					(fileConn.ClientSecret == "" && envSecret == "" && conn.ClientSecret != "")
 
 				if needsSave {
 					if cmdutil.PromptConfirmDefault(f.IO, "Save to config file?") {
-						fileCfg.ClientID = cfg.ClientID
-						fileCfg.ClientSecret = cfg.ClientSecret
+						fileCfg.SetActiveCredentials(conn.ClientID, conn.ClientSecret)
 						if err := fileCfg.Save(); err != nil {
 							fmt.Fprintf(f.IO.ErrOut, "Warning: could not save config: %v\n", err)
 						} else {
@@ -99,8 +102,8 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 			ctx := cmd.Context()
 
 			var tok *oauth2.Token
-			if cfg.GrantType == "client_credentials" {
-				ts := auth.ClientCredentialsTokenSource(ctx, cfg)
+			if conn.GrantType == "client_credentials" {
+				ts := auth.ClientCredentialsTokenSource(ctx, conn)
 				tok, err = ts.Token()
 				if err != nil {
 					return fmt.Errorf("client credentials auth failed: %w", err)
@@ -116,18 +119,18 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 					}
 					return "", fmt.Errorf("no input")
 				}
-				tok, err = auth.LoginHeadless(ctx, cfg, f.IO.ErrOut, readLine)
+				tok, err = auth.LoginHeadless(ctx, conn, f.IO.ErrOut, readLine)
 				if err != nil {
 					return err
 				}
 			} else {
-				tok, err = auth.LoginInteractive(ctx, cfg, f.IO.ErrOut)
+				tok, err = auth.LoginInteractive(ctx, conn, f.IO.ErrOut)
 				if err != nil {
 					return err
 				}
 			}
 
-			if err := auth.SaveToken(tok); err != nil {
+			if err := auth.SaveToken(connName, tok); err != nil {
 				return fmt.Errorf("failed to save token: %w", err)
 			}
 
@@ -151,8 +154,8 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 				tenantID := arr[0].Get("tenantId").String()
 				tenantName := arr[0].Get("tenantName").String()
 				// Use LoadFile to avoid baking env-var secrets into the config file
-				fileCfg, _ := config.LoadFile("")
-				fileCfg.ActiveTenant = tenantID
+				fileCfg, _ := config.LoadFileWithConnection("", connName)
+				fileCfg.SetActiveTenant(tenantID)
 				if err := fileCfg.Save(); err != nil {
 					fmt.Fprintf(f.IO.ErrOut, "Warning: could not save tenant to config: %v\n", err)
 				}
@@ -175,7 +178,12 @@ func newAuthLogoutCmd(f *cmdutil.Factory) *cobra.Command {
 		Use:   "logout",
 		Short: "Remove stored authentication tokens",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := auth.DeleteToken(); err != nil {
+			cfg, err := f.Config()
+			if err != nil {
+				return err
+			}
+			connName := cfg.ActiveConnectionName()
+			if err := auth.DeleteToken(connName); err != nil {
 				return err
 			}
 			fmt.Fprintf(f.IO.ErrOut, "Logged out.\n")
@@ -194,7 +202,10 @@ func newAuthStatusCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			tok, err := auth.LoadToken()
+			conn := cfg.ActiveConn()
+			connName := cfg.ActiveConnectionName()
+
+			tok, err := auth.LoadToken(connName)
 			if err != nil {
 				fmt.Fprintf(f.IO.ErrOut, "Not authenticated. Run 'xero auth login'.\n")
 				return &cmdutil.SilentError{Code: cmdutil.ExitAuth}
@@ -204,10 +215,11 @@ func newAuthStatusCmd(f *cmdutil.Factory) *cobra.Command {
 			if format == "json" {
 				status := map[string]any{
 					"authenticated": true,
-					"tenant_id":     cfg.ActiveTenant,
+					"connection":    connName,
+					"tenant_id":     conn.ActiveTenant,
 					"token_expiry":  tok.Expiry.Format(time.RFC3339),
 					"token_valid":   tok.Valid(),
-					"grant_type":    cfg.GrantType,
+					"grant_type":    conn.GrantType,
 				}
 				data, _ := json.MarshalIndent(status, "", "  ")
 				fmt.Fprintln(f.IO.Out, string(data))
@@ -221,10 +233,11 @@ func newAuthStatusCmd(f *cmdutil.Factory) *cobra.Command {
 
 			rows := []map[string]string{
 				{"field": "Authenticated", "value": "Yes"},
+				{"field": "Connection", "value": connName},
 				{"field": "Token Valid", "value": fmt.Sprintf("%v", tok.Valid())},
 				{"field": "Token Expiry", "value": tok.Expiry.Format(time.RFC3339)},
-				{"field": "Active Tenant", "value": cfg.ActiveTenant},
-				{"field": "Grant Type", "value": cfg.GrantType},
+				{"field": "Active Tenant", "value": conn.ActiveTenant},
+				{"field": "Grant Type", "value": conn.GrantType},
 			}
 
 			rowsJSON, _ := json.Marshal(rows)
@@ -241,7 +254,12 @@ func newAuthMigrateKeychainCmd(f *cmdutil.Factory) *cobra.Command {
 		Use:   "migrate-keychain",
 		Short: "Move stored token from file to OS keychain",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			migrated, err := auth.MigrateTokenToKeychain()
+			cfg, err := f.Config()
+			if err != nil {
+				return err
+			}
+			connName := cfg.ActiveConnectionName()
+			migrated, err := auth.MigrateTokenToKeychain(connName)
 			if err != nil {
 				return err
 			}
@@ -265,14 +283,17 @@ func newAuthRefreshCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			tok, err := auth.LoadToken()
+			conn := cfg.ActiveConn()
+			connName := cfg.ActiveConnectionName()
+
+			tok, err := auth.LoadToken(connName)
 			if err != nil {
 				return fmt.Errorf("not authenticated; run 'xero auth login'")
 			}
 
-			oauthCfg := auth.OAuthConfig(cfg)
+			oauthCfg := auth.OAuthConfig(conn)
 			ts := oauthCfg.TokenSource(cmd.Context(), tok)
-			pts := auth.NewPersistentTokenSource(ts)
+			pts := auth.NewPersistentTokenSource(ts, connName)
 
 			newTok, err := pts.Token()
 			if err != nil {
@@ -284,4 +305,3 @@ func newAuthRefreshCmd(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 }
-

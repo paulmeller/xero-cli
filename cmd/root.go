@@ -33,6 +33,14 @@ Enable shell completions: xero completion --help`,
 		SilenceUsage:  true,
 		Version:       Version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// Wire --connection
+			connName, _ := cmd.Root().PersistentFlags().GetString("connection")
+			if connName == "" {
+				connName = os.Getenv("XERO_CONNECTION")
+			}
+			if connName != "" {
+				f.ConnectionName = connName
+			}
 			// Wire --no-color
 			if noColor, _ := cmd.Root().PersistentFlags().GetBool("no-color"); noColor {
 				f.NoColor = true
@@ -48,6 +56,7 @@ Enable shell completions: xero completion --help`,
 	// Global persistent flags
 	rootCmd.PersistentFlags().StringP("output", "o", "", "Output format: table, json, csv, tsv")
 	rootCmd.PersistentFlags().StringP("tenant", "t", "", "Xero tenant ID (overrides config)")
+	rootCmd.PersistentFlags().StringP("connection", "C", "", "Use named connection profile (overrides config)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Suppress non-essential output")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose output (print HTTP requests/responses)")
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable color output")
@@ -72,6 +81,7 @@ Enable shell completions: xero completion --help`,
 	// Register commands
 	rootCmd.AddCommand(newAuthCmd(f))
 	rootCmd.AddCommand(newTenantsCmd(f))
+	rootCmd.AddCommand(newConnectionCmd(f))
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newInvoicesCmd(f))
 	rootCmd.AddCommand(newContactsCmd(f))

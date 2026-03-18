@@ -8,20 +8,151 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Connection holds credentials and settings for a single Xero app connection.
+type Connection struct {
+	ClientID     string   `toml:"client_id"`
+	ClientSecret string   `toml:"client_secret"`
+	Scopes       []string `toml:"scopes,omitempty"`
+	RedirectURI  string   `toml:"redirect_uri,omitempty"`
+	GrantType    string   `toml:"grant_type,omitempty"`
+	ActiveTenant string   `toml:"active_tenant,omitempty"`
+}
+
 type Config struct {
+	// Legacy flat fields (backward compat — used as "default" connection)
 	ClientID     string   `toml:"client_id"`
 	ClientSecret string   `toml:"client_secret"`
 	Scopes       []string `toml:"scopes"`
 	RedirectURI  string   `toml:"redirect_uri"`
 	GrantType    string   `toml:"grant_type"`
 	ActiveTenant string   `toml:"active_tenant"`
-	Defaults     Defaults `toml:"defaults"`
+
+	// Multi-connection support
+	ActiveConnection string                `toml:"active_connection,omitempty"`
+	Connections      map[string]*Connection `toml:"connections,omitempty"`
+
+	Defaults Defaults `toml:"defaults"`
 }
 
 type Defaults struct {
 	Output   string `toml:"output"`
 	PageSize int    `toml:"page_size"`
 	CacheTTL string `toml:"cache_ttl"` // e.g. "5m", "1h", "0" to disable
+}
+
+// ActiveConnectionName returns the name of the active connection.
+// Returns "default" when using legacy flat config fields.
+func (c *Config) ActiveConnectionName() string {
+	if c.ActiveConnection != "" {
+		return c.ActiveConnection
+	}
+	return "default"
+}
+
+// ActiveConn returns the active connection's settings.
+// If a named connection is active and exists in the map, that entry is returned.
+// Otherwise, a Connection is synthesized from the legacy flat fields.
+func (c *Config) ActiveConn() *Connection {
+	if c.ActiveConnection != "" && c.Connections != nil {
+		if conn, ok := c.Connections[c.ActiveConnection]; ok {
+			// Fill in defaults from the top-level config for fields not set on the connection
+			if len(conn.Scopes) == 0 {
+				conn.Scopes = c.Scopes
+			}
+			if conn.RedirectURI == "" {
+				conn.RedirectURI = c.RedirectURI
+			}
+			return conn
+		}
+	}
+	// Synthesize from flat fields (backward compat)
+	return &Connection{
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Scopes:       c.Scopes,
+		RedirectURI:  c.RedirectURI,
+		GrantType:    c.GrantType,
+		ActiveTenant: c.ActiveTenant,
+	}
+}
+
+// SetActiveTenant sets the active tenant on the correct connection entry.
+func (c *Config) SetActiveTenant(tenantID string) {
+	if c.ActiveConnection != "" && c.Connections != nil {
+		if conn, ok := c.Connections[c.ActiveConnection]; ok {
+			conn.ActiveTenant = tenantID
+			return
+		}
+	}
+	c.ActiveTenant = tenantID
+}
+
+// SetActiveCredentials sets the client ID and secret on the correct connection entry.
+func (c *Config) SetActiveCredentials(clientID, clientSecret string) {
+	if c.ActiveConnection != "" && c.Connections != nil {
+		if conn, ok := c.Connections[c.ActiveConnection]; ok {
+			conn.ClientID = clientID
+			conn.ClientSecret = clientSecret
+			return
+		}
+	}
+	c.ClientID = clientID
+	c.ClientSecret = clientSecret
+}
+
+// SetConnection adds or updates a named connection.
+func (c *Config) SetConnection(name string, conn *Connection) {
+	if c.Connections == nil {
+		c.Connections = make(map[string]*Connection)
+	}
+	c.Connections[name] = conn
+}
+
+// RemoveConnection removes a named connection from the map.
+func (c *Config) RemoveConnection(name string) error {
+	if c.Connections == nil {
+		return fmt.Errorf("connection %q not found", name)
+	}
+	if _, ok := c.Connections[name]; !ok {
+		return fmt.Errorf("connection %q not found", name)
+	}
+	delete(c.Connections, name)
+	return nil
+}
+
+// ConnectionNames returns the names of all configured connections.
+// Includes "default" if flat fields have a client_id set.
+func (c *Config) ConnectionNames() []string {
+	var names []string
+	if c.ClientID != "" {
+		names = append(names, "default")
+	}
+	for name := range c.Connections {
+		names = append(names, name)
+	}
+	return names
+}
+
+// GetConnection returns a connection by name. "default" returns the synthesized flat-field connection.
+func (c *Config) GetConnection(name string) (*Connection, bool) {
+	if name == "default" || name == "" {
+		if c.ClientID != "" {
+			return &Connection{
+				ClientID:     c.ClientID,
+				ClientSecret: c.ClientSecret,
+				Scopes:       c.Scopes,
+				RedirectURI:  c.RedirectURI,
+				GrantType:    c.GrantType,
+				ActiveTenant: c.ActiveTenant,
+			}, true
+		}
+		return nil, false
+	}
+	if c.Connections != nil {
+		conn, ok := c.Connections[name]
+		return conn, ok
+	}
+	return nil, false
 }
 
 func ConfigDir() (string, error) {
@@ -51,12 +182,21 @@ func ConfigPath() (string, error) {
 	return filepath.Join(dir, "config.toml"), nil
 }
 
+// TokenPath returns the token file path for the default connection.
 func TokenPath() (string, error) {
+	return TokenPathFor("default")
+}
+
+// TokenPathFor returns the token file path for a named connection.
+func TokenPathFor(connectionName string) (string, error) {
 	dir, err := ConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "tokens.json"), nil
+	if connectionName == "" || connectionName == "default" {
+		return filepath.Join(dir, "tokens.json"), nil
+	}
+	return filepath.Join(dir, "tokens-"+connectionName+".json"), nil
 }
 
 // newDefaults returns a Config with default values (no env overlay).
@@ -108,26 +248,60 @@ func LoadFile(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// LoadFileWithConnection loads config from file and sets the active connection override.
+func LoadFileWithConnection(path, connectionOverride string) (*Config, error) {
+	cfg, err := LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if connectionOverride != "" {
+		cfg.ActiveConnection = connectionOverride
+	}
+	return cfg, nil
+}
+
 // Load loads config from the TOML file, then applies env-var overlays.
 func Load(path string) (*Config, error) {
+	return LoadWithConnection(path, "")
+}
+
+// LoadWithConnection loads config with an optional connection override, then applies env-var overlays.
+func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 	cfg, err := LoadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Env var overlay
+	// Apply connection override (flag takes precedence over env)
+	if connectionOverride != "" {
+		cfg.ActiveConnection = connectionOverride
+	} else if v := os.Getenv("XERO_CONNECTION"); v != "" {
+		cfg.ActiveConnection = v
+	}
+
+	// Env var overlays apply to the active connection
+	conn := cfg.ActiveConn()
 	if v := os.Getenv("XERO_CLIENT_ID"); v != "" {
-		cfg.ClientID = v
+		conn.ClientID = v
 	}
 	if v := os.Getenv("XERO_CLIENT_SECRET"); v != "" {
-		cfg.ClientSecret = v
+		conn.ClientSecret = v
 	}
 	if v := os.Getenv("XERO_TENANT_ID"); v != "" {
-		cfg.ActiveTenant = v
+		conn.ActiveTenant = v
 	}
 	if v := os.Getenv("XERO_GRANT_TYPE"); v != "" {
-		cfg.GrantType = v
+		conn.GrantType = v
 	}
+
+	// Write back to the flat fields if using default connection (backward compat)
+	if cfg.ActiveConnectionName() == "default" {
+		cfg.ClientID = conn.ClientID
+		cfg.ClientSecret = conn.ClientSecret
+		cfg.ActiveTenant = conn.ActiveTenant
+		cfg.GrantType = conn.GrantType
+	}
+
 	if v := os.Getenv("XERO_CACHE_TTL"); v != "" {
 		cfg.Defaults.CacheTTL = v
 	}

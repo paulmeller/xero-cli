@@ -47,6 +47,7 @@ func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			cfg, _ := f.Config()
+			conn := cfg.ActiveConn()
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 
 			if format == "json" {
@@ -67,7 +68,7 @@ func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
 			tenants.ForEach(func(_, t gjson.Result) bool {
 				m := map[string]any{}
 				json.Unmarshal([]byte(t.Raw), &m)
-				if cfg != nil && t.Get("tenantId").String() == cfg.ActiveTenant {
+				if conn != nil && t.Get("tenantId").String() == conn.ActiveTenant {
 					m["_active"] = "*"
 				} else {
 					m["_active"] = ""
@@ -137,9 +138,12 @@ func newTenantsSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 				fmt.Fprintf(f.IO.ErrOut, "Matched: %s\n", matches[0].Get("tenantName").String())
 			}
 
+			cfg, _ := f.Config()
+			connName := cfg.ActiveConnectionName()
+
 			// Use LoadFile to avoid baking env-var secrets into the config file
-			fileCfg, _ := config.LoadFile("")
-			fileCfg.ActiveTenant = tenantID
+			fileCfg, _ := config.LoadFileWithConnection("", connName)
+			fileCfg.SetActiveTenant(tenantID)
 			if err := fileCfg.Save(); err != nil {
 				return fmt.Errorf("failed to save config: %w", err)
 			}
@@ -164,19 +168,21 @@ func newTenantsCurrentCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			if cfg.ActiveTenant == "" {
+			conn := cfg.ActiveConn()
+
+			if conn.ActiveTenant == "" {
 				fmt.Fprintf(f.IO.ErrOut, "No active tenant set. Run 'xero tenants switch <id>'.\n")
 				return nil
 			}
 
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 			if format == "json" {
-				data, _ := json.MarshalIndent(map[string]string{"tenant_id": cfg.ActiveTenant}, "", "  ")
+				data, _ := json.MarshalIndent(map[string]string{"tenant_id": conn.ActiveTenant}, "", "  ")
 				fmt.Fprintln(f.IO.Out, string(data))
 				return nil
 			}
 
-			fmt.Fprintln(f.IO.Out, cfg.ActiveTenant)
+			fmt.Fprintln(f.IO.Out, conn.ActiveTenant)
 			return nil
 		},
 	}
@@ -190,12 +196,15 @@ func tenantsClient(cmd *cobra.Command, f *cmdutil.Factory) (*api.Client, error) 
 		return nil, err
 	}
 
-	tok, err := auth.LoadToken()
+	conn := cfg.ActiveConn()
+	connName := cfg.ActiveConnectionName()
+
+	tok, err := auth.LoadToken(connName)
 	if err != nil {
 		return nil, fmt.Errorf("not authenticated; run 'xero auth login'")
 	}
 
-	oauthCfg := auth.OAuthConfig(cfg)
+	oauthCfg := auth.OAuthConfig(conn)
 	ts := oauthCfg.TokenSource(cmd.Context(), tok)
 	httpClient := oauth2.NewClient(cmd.Context(), ts)
 
