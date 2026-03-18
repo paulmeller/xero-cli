@@ -9,12 +9,12 @@ import (
 	"github.com/paulmeller/xero-cli/internal/config"
 )
 
-func ClientCredentialsTokenSource(ctx context.Context, cfg *config.Config) oauth2.TokenSource {
+func ClientCredentialsTokenSource(ctx context.Context, conn *config.Connection) oauth2.TokenSource {
 	ccCfg := &clientcredentials.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
+		ClientID:     conn.ClientID,
+		ClientSecret: conn.ClientSecret,
 		TokenURL:     TokenURL,
-		Scopes:       cfg.Scopes,
+		Scopes:       conn.Scopes,
 	}
 	return ccCfg.TokenSource(ctx)
 }

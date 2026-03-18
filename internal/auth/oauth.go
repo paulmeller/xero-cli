@@ -19,16 +19,16 @@ const (
 	TokenURL = "https://identity.xero.com/connect/token"
 )
 
-func OAuthConfig(cfg *config.Config) *oauth2.Config {
+func OAuthConfig(conn *config.Connection) *oauth2.Config {
 	return &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Scopes:       cfg.Scopes,
+		ClientID:     conn.ClientID,
+		ClientSecret: conn.ClientSecret,
+		Scopes:       conn.Scopes,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  AuthURL,
 			TokenURL: TokenURL,
 		},
-		RedirectURL: cfg.RedirectURI,
+		RedirectURL: conn.RedirectURI,
 	}
 }
 
@@ -45,8 +45,8 @@ func CodeChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
-func LoginInteractive(ctx context.Context, cfg *config.Config, w io.Writer) (*oauth2.Token, error) {
-	oauthCfg := OAuthConfig(cfg)
+func LoginInteractive(ctx context.Context, conn *config.Connection, w io.Writer) (*oauth2.Token, error) {
+	oauthCfg := OAuthConfig(conn)
 
 	verifier, err := GenerateCodeVerifier()
 	if err != nil {
@@ -59,7 +59,7 @@ func LoginInteractive(ctx context.Context, cfg *config.Config, w io.Writer) (*oa
 		return nil, fmt.Errorf("failed to generate state: %w", err)
 	}
 
-	srv := NewCallbackServer(cfg.RedirectURI, state)
+	srv := NewCallbackServer(conn.RedirectURI, state)
 	if err := srv.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start callback server: %w", err)
 	}
@@ -92,8 +92,8 @@ func LoginInteractive(ctx context.Context, cfg *config.Config, w io.Writer) (*oa
 	return tok, nil
 }
 
-func LoginHeadless(ctx context.Context, cfg *config.Config, w io.Writer, readLine func() (string, error)) (*oauth2.Token, error) {
-	oauthCfg := OAuthConfig(cfg)
+func LoginHeadless(ctx context.Context, conn *config.Connection, w io.Writer, readLine func() (string, error)) (*oauth2.Token, error) {
+	oauthCfg := OAuthConfig(conn)
 
 	verifier, err := GenerateCodeVerifier()
 	if err != nil {

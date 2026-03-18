@@ -32,6 +32,7 @@ type Factory struct {
 	TenantID           func(cmd *cobra.Command) (string, error)
 	NoColor            bool
 	Timeout            time.Duration
+	ConnectionName     string // set from --connection flag or XERO_CONNECTION env
 }
 
 // BindTokenFlag should be called from the root command's PersistentPreRunE.
@@ -62,10 +63,11 @@ func ResolveTenantID(cmd *cobra.Command, f *Factory) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if cfg.ActiveTenant == "" {
+	conn := cfg.ActiveConn()
+	if conn.ActiveTenant == "" {
 		return "", fmt.Errorf("no tenant configured; set --tenant or run 'xero tenants switch'")
 	}
-	return cfg.ActiveTenant, nil
+	return conn.ActiveTenant, nil
 }
 
 // NewFactory creates a Factory with default implementations.
@@ -78,13 +80,12 @@ func NewFactory() *Factory {
 
 	ios.IsTTY = term.IsTerminal(int(os.Stdin.Fd()))
 
-	configFunc := func() (*config.Config, error) {
-		return config.Load("")
+	f := &Factory{
+		IO: ios,
 	}
 
-	f := &Factory{
-		Config: configFunc,
-		IO:     ios,
+	f.Config = func() (*config.Config, error) {
+		return config.LoadWithConnection("", f.ConnectionName)
 	}
 
 	f.Formatter = func(format string) output.Formatter {
@@ -102,7 +103,7 @@ func NewFactory() *Factory {
 	}
 
 	f.APIClient = func() (*api.Client, error) {
-		cfg, err := configFunc()
+		cfg, err := f.Config()
 		if err != nil {
 			return nil, err
 		}

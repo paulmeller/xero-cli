@@ -173,29 +173,32 @@ func NewClient(httpClient *http.Client, tenantID string, verbose, dryRun bool, e
 
 // NewClientFromConfig creates a Client from the loaded config.
 func NewClientFromConfig(cfg *config.Config) (*Client, error) {
-	if cfg.ClientID == "" {
+	conn := cfg.ActiveConn()
+	connName := cfg.ActiveConnectionName()
+
+	if conn.ClientID == "" {
 		return nil, fmt.Errorf("client ID not configured; set XERO_CLIENT_ID or configure in config.toml")
 	}
-	if cfg.ActiveTenant == "" {
+	if conn.ActiveTenant == "" {
 		return nil, fmt.Errorf("no active tenant; run 'xero tenants switch' or set XERO_TENANT_ID")
 	}
 
 	var tokenSource oauth2.TokenSource
-	if cfg.GrantType == "client_credentials" {
-		tokenSource = auth.ClientCredentialsTokenSource(context.Background(), cfg)
+	if conn.GrantType == "client_credentials" {
+		tokenSource = auth.ClientCredentialsTokenSource(context.Background(), conn)
 	} else {
-		underlying, err := auth.LoadToken()
+		underlying, err := auth.LoadToken(connName)
 		if err != nil {
 			return nil, fmt.Errorf("not authenticated; run 'xero auth login': %w", err)
 		}
-		oauthCfg := auth.OAuthConfig(cfg)
+		oauthCfg := auth.OAuthConfig(conn)
 		tokenSource = oauthCfg.TokenSource(context.Background(), underlying)
 	}
 
-	pts := auth.NewPersistentTokenSource(tokenSource)
+	pts := auth.NewPersistentTokenSource(tokenSource, connName)
 	httpClient := oauth2.NewClient(context.Background(), pts)
 
-	return NewClient(httpClient, cfg.ActiveTenant, false, false, io.Discard), nil
+	return NewClient(httpClient, conn.ActiveTenant, false, false, io.Discard), nil
 }
 
 // NewClientFromToken creates a Client using an externally-provided access token.

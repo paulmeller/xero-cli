@@ -15,20 +15,28 @@ import (
 
 const (
 	keyringService = "xero-cli"
-	keyringUser    = "oauth-token"
 )
+
+func keyringUserFor(connectionName string) string {
+	if connectionName == "" || connectionName == "default" {
+		return "oauth-token"
+	}
+	return "oauth-token:" + connectionName
+}
 
 // PersistentTokenSource implements oauth2.TokenSource with disk persistence.
 // It wraps an underlying token source and saves tokens atomically on refresh.
 type PersistentTokenSource struct {
-	mu         sync.Mutex
-	underlying oauth2.TokenSource
-	cached     *oauth2.Token
+	mu             sync.Mutex
+	underlying     oauth2.TokenSource
+	cached         *oauth2.Token
+	connectionName string
 }
 
-func NewPersistentTokenSource(underlying oauth2.TokenSource) *PersistentTokenSource {
+func NewPersistentTokenSource(underlying oauth2.TokenSource, connectionName string) *PersistentTokenSource {
 	return &PersistentTokenSource{
-		underlying: underlying,
+		underlying:     underlying,
+		connectionName: connectionName,
 	}
 }
 
@@ -38,7 +46,7 @@ func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 
 	// Try loading from storage if we have no cached token
 	if s.cached == nil {
-		t, _ := LoadToken()
+		t, _ := LoadToken(s.connectionName)
 		s.cached = t
 	}
 
@@ -58,7 +66,7 @@ func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 	}
 
 	s.cached = tok
-	if err := SaveToken(tok); err != nil {
+	if err := SaveToken(s.connectionName, tok); err != nil {
 		// Log but don't fail - we have a valid token in memory
 		fmt.Fprintf(os.Stderr, "warning: could not save token: %v\n", err)
 	}
@@ -67,9 +75,11 @@ func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 }
 
 // LoadToken loads the OAuth token, trying keychain first then falling back to file.
-func LoadToken() (*oauth2.Token, error) {
+func LoadToken(connectionName string) (*oauth2.Token, error) {
+	user := keyringUserFor(connectionName)
+
 	// Try keychain first
-	data, err := keyring.Get(keyringService, keyringUser)
+	data, err := keyring.Get(keyringService, user)
 	if err == nil {
 		var tok oauth2.Token
 		if err := json.Unmarshal([]byte(data), &tok); err == nil {
@@ -78,36 +88,40 @@ func LoadToken() (*oauth2.Token, error) {
 	}
 
 	// Fall back to file
-	return loadTokenFromFile()
+	return loadTokenFromFile(connectionName)
 }
 
 // SaveToken saves the OAuth token to keychain with file fallback.
-func SaveToken(tok *oauth2.Token) error {
+func SaveToken(connectionName string, tok *oauth2.Token) error {
+	user := keyringUserFor(connectionName)
+
 	data, err := json.Marshal(tok)
 	if err != nil {
 		return err
 	}
 
 	// Try keychain first
-	if err := keyring.Set(keyringService, keyringUser, string(data)); err == nil {
+	if err := keyring.Set(keyringService, user, string(data)); err == nil {
 		// Success — clean up legacy file if it exists
-		if path, err := config.TokenPath(); err == nil {
+		if path, err := config.TokenPathFor(connectionName); err == nil {
 			os.Remove(path)
 		}
 		return nil
 	}
 
 	// Fall back to file
-	return saveTokenToFile(tok)
+	return saveTokenToFile(connectionName, tok)
 }
 
 // DeleteToken removes the OAuth token from both keychain and file.
-func DeleteToken() error {
+func DeleteToken(connectionName string) error {
+	user := keyringUserFor(connectionName)
+
 	// Delete from keychain (ignore error if not found)
-	_ = keyring.Delete(keyringService, keyringUser)
+	_ = keyring.Delete(keyringService, user)
 
 	// Also delete file if it exists
-	path, err := config.TokenPath()
+	path, err := config.TokenPathFor(connectionName)
 	if err != nil {
 		return err
 	}
@@ -119,31 +133,33 @@ func DeleteToken() error {
 
 // MigrateTokenToKeychain moves a file-based token to the OS keychain.
 // Returns true if migration occurred, false if no file token existed.
-func MigrateTokenToKeychain() (bool, error) {
-	tok, err := loadTokenFromFile()
+func MigrateTokenToKeychain(connectionName string) (bool, error) {
+	tok, err := loadTokenFromFile(connectionName)
 	if err != nil {
 		return false, nil // no file token to migrate
 	}
+
+	user := keyringUserFor(connectionName)
 
 	data, err := json.Marshal(tok)
 	if err != nil {
 		return false, err
 	}
 
-	if err := keyring.Set(keyringService, keyringUser, string(data)); err != nil {
+	if err := keyring.Set(keyringService, user, string(data)); err != nil {
 		return false, fmt.Errorf("keychain not available: %w", err)
 	}
 
 	// Remove file after successful migration
-	if path, err := config.TokenPath(); err == nil {
+	if path, err := config.TokenPathFor(connectionName); err == nil {
 		os.Remove(path)
 	}
 
 	return true, nil
 }
 
-func loadTokenFromFile() (*oauth2.Token, error) {
-	path, err := config.TokenPath()
+func loadTokenFromFile(connectionName string) (*oauth2.Token, error) {
+	path, err := config.TokenPathFor(connectionName)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +174,8 @@ func loadTokenFromFile() (*oauth2.Token, error) {
 	return &tok, nil
 }
 
-func saveTokenToFile(tok *oauth2.Token) error {
-	path, err := config.TokenPath()
+func saveTokenToFile(connectionName string, tok *oauth2.Token) error {
+	path, err := config.TokenPathFor(connectionName)
 	if err != nil {
 		return err
 	}
