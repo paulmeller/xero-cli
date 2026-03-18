@@ -32,10 +32,23 @@ func newTenantsCmd(f *cmdutil.Factory) *cobra.Command {
 }
 
 func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List connected organizations",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			allConns, _ := cmd.Flags().GetBool("all")
+
+			cfg, err := f.Config()
+			if err != nil {
+				return err
+			}
+
+			format := cmdutil.GetOutputFormat(cmd, f.IO)
+
+			if allConns {
+				return listTenantsAllConnections(cmd, f, cfg, format)
+			}
+
 			client, err := tenantsClient(cmd, f)
 			if err != nil {
 				return err
@@ -46,12 +59,7 @@ func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			cfg, err := f.Config()
-			if err != nil {
-				return err
-			}
 			conn := cfg.ActiveConn()
-			format := cmdutil.GetOutputFormat(cmd, f.IO)
 
 			if format == "json" {
 				formatter := f.Formatter("json")
@@ -85,6 +93,95 @@ func newTenantsListCmd(f *cmdutil.Factory) *cobra.Command {
 			return formatter.FormatList(f.IO.Out, gjson.ParseBytes(enrichedJSON), columns)
 		},
 	}
+
+	cmd.Flags().Bool("all", false, "List tenants across all connections")
+
+	return cmd
+}
+
+func listTenantsAllConnections(cmd *cobra.Command, f *cmdutil.Factory, cfg *config.Config, format string) error {
+	activeConnName := cfg.ActiveConnectionName()
+	activeConn := cfg.ActiveConn()
+	names := cfg.ConnectionNames()
+
+	if len(names) == 0 {
+		fmt.Fprintf(f.IO.ErrOut, "No connections configured.\n")
+		return nil
+	}
+
+	var allTenants []map[string]any
+
+	for _, name := range names {
+		conn, ok := cfg.GetConnection(name)
+		if !ok {
+			continue
+		}
+
+		// Fill in global defaults for scopes/redirect
+		if len(conn.Scopes) == 0 {
+			conn.Scopes = cfg.Scopes
+		}
+		if conn.RedirectURI == "" {
+			conn.RedirectURI = cfg.RedirectURI
+		}
+
+		tok, err := auth.LoadToken(name)
+		if err != nil {
+			fmt.Fprintf(f.IO.ErrOut, "Skipping connection %q: not authenticated\n", name)
+			continue
+		}
+
+		oauthCfg := auth.OAuthConfig(conn)
+		ts := oauthCfg.TokenSource(cmd.Context(), tok)
+		httpClient := oauth2.NewClient(cmd.Context(), ts)
+		client := api.NewClient(httpClient, "", false, false, io.Discard)
+
+		data, err := client.GetConnections(cmd.Context())
+		if err != nil {
+			fmt.Fprintf(f.IO.ErrOut, "Skipping connection %q: %v\n", name, err)
+			continue
+		}
+
+		tenants := gjson.ParseBytes(data)
+		tenants.ForEach(func(_, t gjson.Result) bool {
+			m := map[string]any{}
+			json.Unmarshal([]byte(t.Raw), &m)
+			m["_connection"] = name
+			isActive := name == activeConnName &&
+				activeConn != nil &&
+				t.Get("tenantId").String() == activeConn.ActiveTenant
+			if isActive {
+				m["_active"] = "*"
+			} else {
+				m["_active"] = ""
+			}
+			allTenants = append(allTenants, m)
+			return true
+		})
+	}
+
+	if len(allTenants) == 0 {
+		fmt.Fprintf(f.IO.ErrOut, "No tenants found across any connection.\n")
+		return nil
+	}
+
+	enrichedJSON, _ := json.Marshal(allTenants)
+
+	if format == "json" {
+		formatter := f.Formatter("json")
+		return formatter.FormatList(f.IO.Out, gjson.ParseBytes(enrichedJSON), nil)
+	}
+
+	columns := []output.Column{
+		{Header: "ACTIVE", Path: "_active"},
+		{Header: "CONNECTION", Path: "_connection"},
+		{Header: "TENANT ID", Path: "tenantId"},
+		{Header: "NAME", Path: "tenantName"},
+		{Header: "TYPE", Path: "tenantType"},
+	}
+
+	formatter := f.Formatter(format)
+	return formatter.FormatList(f.IO.Out, gjson.ParseBytes(enrichedJSON), columns)
 }
 
 func newTenantsSwitchCmd(f *cmdutil.Factory) *cobra.Command {
