@@ -35,19 +35,22 @@ type Connection struct {
 }
 
 type Config struct {
-	// Legacy flat fields (backward compat — used as "default" connection)
-	ClientID     string   `toml:"client_id"`
-	ClientSecret string   `toml:"client_secret"`
-	Scopes       []string `toml:"scopes"`
-	RedirectURI  string   `toml:"redirect_uri"`
-	GrantType    string   `toml:"grant_type"`
-	ActiveTenant string   `toml:"active_tenant"`
+	// Global defaults — connections inherit these when their own fields are empty.
+	Scopes      []string `toml:"scopes"`
+	RedirectURI string   `toml:"redirect_uri"`
 
-	// Multi-connection support
+	// Active connection name. Empty means "default".
 	ActiveConnection string                `toml:"active_connection,omitempty"`
-	Connections      map[string]*Connection `toml:"connections,omitempty"`
+	Connections      map[string]*Connection `toml:"connections"`
 
 	Defaults Defaults `toml:"defaults"`
+
+	// Legacy flat fields — only used for migration from old config format.
+	// Cleared after load; omitempty prevents them from being saved.
+	ClientID     string `toml:"client_id,omitempty"`
+	ClientSecret string `toml:"client_secret,omitempty"`
+	GrantType    string `toml:"grant_type,omitempty"`
+	ActiveTenant string `toml:"active_tenant,omitempty"`
 }
 
 type Defaults struct {
@@ -56,8 +59,31 @@ type Defaults struct {
 	CacheTTL string `toml:"cache_ttl"` // e.g. "5m", "1h", "0" to disable
 }
 
+// migrate moves legacy flat credential fields into connections["default"]
+// and clears them so they won't be written back on Save.
+func (c *Config) migrate() {
+	if c.ClientID == "" {
+		return
+	}
+	if c.Connections == nil {
+		c.Connections = make(map[string]*Connection)
+	}
+	if _, exists := c.Connections["default"]; !exists {
+		c.Connections["default"] = &Connection{
+			ClientID:     c.ClientID,
+			ClientSecret: c.ClientSecret,
+			GrantType:    c.GrantType,
+			ActiveTenant: c.ActiveTenant,
+		}
+	}
+	c.ClientID = ""
+	c.ClientSecret = ""
+	c.GrantType = ""
+	c.ActiveTenant = ""
+}
+
 // ActiveConnectionName returns the name of the active connection.
-// Returns "default" when using legacy flat config fields.
+// Returns "default" when no explicit connection is set.
 func (c *Config) ActiveConnectionName() string {
 	if c.ActiveConnection != "" {
 		return c.ActiveConnection
@@ -66,15 +92,12 @@ func (c *Config) ActiveConnectionName() string {
 }
 
 // ActiveConn returns a copy of the active connection's settings.
-// If a named connection is active and exists in the map, a copy of that entry
-// is returned with defaults filled in from the top-level config.
-// Otherwise, a Connection is synthesized from the legacy flat fields.
-// The returned Connection is always a fresh copy — safe to mutate without
-// affecting the stored config.
+// Global scopes and redirect_uri are filled in when the connection
+// doesn't specify its own. Always returns a non-nil Connection.
 func (c *Config) ActiveConn() *Connection {
-	if c.ActiveConnection != "" && c.Connections != nil {
-		if conn, ok := c.Connections[c.ActiveConnection]; ok {
-			// Return a copy with defaults filled in
+	name := c.ActiveConnectionName()
+	if c.Connections != nil {
+		if conn, ok := c.Connections[name]; ok {
 			cp := *conn
 			if len(cp.Scopes) == 0 {
 				cp.Scopes = append([]string(nil), c.Scopes...)
@@ -85,39 +108,40 @@ func (c *Config) ActiveConn() *Connection {
 			return &cp
 		}
 	}
-	// Synthesize from flat fields (backward compat)
+	// No connection found — return empty connection with global defaults.
 	return &Connection{
-		ClientID:     c.ClientID,
-		ClientSecret: c.ClientSecret,
-		Scopes:       append([]string(nil), c.Scopes...),
-		RedirectURI:  c.RedirectURI,
-		GrantType:    c.GrantType,
-		ActiveTenant: c.ActiveTenant,
+		Scopes:      append([]string(nil), c.Scopes...),
+		RedirectURI: c.RedirectURI,
 	}
 }
 
-// SetActiveTenant sets the active tenant on the correct connection entry.
+// SetActiveTenant sets the active tenant on the active connection,
+// creating the connection entry if it doesn't exist.
 func (c *Config) SetActiveTenant(tenantID string) {
-	if c.ActiveConnection != "" && c.Connections != nil {
-		if conn, ok := c.Connections[c.ActiveConnection]; ok {
-			conn.ActiveTenant = tenantID
-			return
-		}
-	}
-	c.ActiveTenant = tenantID
+	conn := c.ensureActiveConn()
+	conn.ActiveTenant = tenantID
 }
 
-// SetActiveCredentials sets the client ID and secret on the correct connection entry.
+// SetActiveCredentials sets the client ID and secret on the active connection,
+// creating the connection entry if it doesn't exist.
 func (c *Config) SetActiveCredentials(clientID, clientSecret string) {
-	if c.ActiveConnection != "" && c.Connections != nil {
-		if conn, ok := c.Connections[c.ActiveConnection]; ok {
-			conn.ClientID = clientID
-			conn.ClientSecret = clientSecret
-			return
-		}
+	conn := c.ensureActiveConn()
+	conn.ClientID = clientID
+	conn.ClientSecret = clientSecret
+}
+
+// ensureActiveConn returns the active connection entry, creating it if needed.
+func (c *Config) ensureActiveConn() *Connection {
+	name := c.ActiveConnectionName()
+	if c.Connections == nil {
+		c.Connections = make(map[string]*Connection)
 	}
-	c.ClientID = clientID
-	c.ClientSecret = clientSecret
+	conn, ok := c.Connections[name]
+	if !ok {
+		conn = &Connection{}
+		c.Connections[name] = conn
+	}
+	return conn
 }
 
 // SetConnection adds or updates a named connection.
@@ -146,38 +170,17 @@ func (c *Config) RemoveConnection(name string) error {
 }
 
 // ConnectionNames returns the sorted names of all configured connections.
-// Includes "default" (listed first) if flat fields have a client_id set.
 func (c *Config) ConnectionNames() []string {
-	var names []string
-	if c.ClientID != "" {
-		names = append(names, "default")
-	}
-	named := make([]string, 0, len(c.Connections))
+	names := make([]string, 0, len(c.Connections))
 	for name := range c.Connections {
-		named = append(named, name)
+		names = append(names, name)
 	}
-	sort.Strings(named)
-	names = append(names, named...)
+	sort.Strings(names)
 	return names
 }
 
 // GetConnection returns a copy of a connection by name.
-// "default" returns the synthesized flat-field connection.
-// The returned Connection is always a fresh copy — safe to mutate.
 func (c *Config) GetConnection(name string) (*Connection, bool) {
-	if name == "default" || name == "" {
-		if c.ClientID != "" {
-			return &Connection{
-				ClientID:     c.ClientID,
-				ClientSecret: c.ClientSecret,
-				Scopes:       append([]string(nil), c.Scopes...),
-				RedirectURI:  c.RedirectURI,
-				GrantType:    c.GrantType,
-				ActiveTenant: c.ActiveTenant,
-			}, true
-		}
-		return nil, false
-	}
 	if c.Connections != nil {
 		if conn, ok := c.Connections[name]; ok {
 			cp := *conn
@@ -263,6 +266,7 @@ func resolvePath(path string) (string, error) {
 
 // LoadFile loads config from the TOML file only, without env-var overlays.
 // Use this when you intend to mutate and Save() — avoids baking env-var secrets into the file.
+// Legacy flat-field configs are automatically migrated to the connections map.
 func LoadFile(path string) (*Config, error) {
 	cfg := newDefaults()
 
@@ -277,6 +281,7 @@ func LoadFile(path string) (*Config, error) {
 		}
 	}
 
+	cfg.migrate()
 	return cfg, nil
 }
 
@@ -287,13 +292,17 @@ func LoadFileWithConnection(path, connectionOverride string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if connectionOverride != "" {
-		if connectionOverride != "default" {
-			if cfg.Connections == nil || cfg.Connections[connectionOverride] == nil {
-				return nil, fmt.Errorf("connection %q not found", connectionOverride)
-			}
+	if connectionOverride != "" && connectionOverride != "default" {
+		if cfg.Connections[connectionOverride] == nil {
+			return nil, fmt.Errorf("connection %q not found", connectionOverride)
 		}
-		cfg.ActiveConnection = connectionOverride
+	}
+	if connectionOverride != "" {
+		if connectionOverride == "default" {
+			cfg.ActiveConnection = ""
+		} else {
+			cfg.ActiveConnection = connectionOverride
+		}
 	}
 	return cfg, nil
 }
@@ -317,11 +326,9 @@ func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 		cfg.ActiveConnection = v
 	}
 
-	// Env var overlays apply to the active connection.
-	// ActiveConn() returns a copy, so mutations here are safe and do not
-	// bleed into the stored config. We apply env overrides onto the copy,
-	// then write the values back to the appropriate storage location.
-	conn := cfg.ActiveConn()
+	// Env var overlays — applied to the active connection in-memory.
+	// This config should NOT be saved; use LoadFile for mutation paths.
+	conn := cfg.ensureActiveConn()
 	if v := os.Getenv("XERO_CLIENT_ID"); v != "" {
 		conn.ClientID = v
 	}
@@ -333,22 +340,6 @@ func LoadWithConnection(path, connectionOverride string) (*Config, error) {
 	}
 	if v := os.Getenv("XERO_GRANT_TYPE"); v != "" {
 		conn.GrantType = v
-	}
-
-	// Write env-overlaid values back so callers see them via the flat fields
-	// or the connection map as appropriate.
-	if cfg.ActiveConnectionName() == "default" {
-		cfg.ClientID = conn.ClientID
-		cfg.ClientSecret = conn.ClientSecret
-		cfg.ActiveTenant = conn.ActiveTenant
-		cfg.GrantType = conn.GrantType
-	} else if cfg.Connections != nil {
-		if stored, ok := cfg.Connections[cfg.ActiveConnection]; ok {
-			stored.ClientID = conn.ClientID
-			stored.ClientSecret = conn.ClientSecret
-			stored.ActiveTenant = conn.ActiveTenant
-			stored.GrantType = conn.GrantType
-		}
 	}
 
 	if v := os.Getenv("XERO_CACHE_TTL"); v != "" {

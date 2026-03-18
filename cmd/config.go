@@ -100,20 +100,14 @@ func newConfigSetCmd(f *cmdutil.Factory) *cobra.Command {
 			case "active_tenant":
 				cfg.SetActiveTenant(value)
 			case "grant_type":
-				if cfg.ActiveConnectionName() != "default" && cfg.Connections != nil {
-					if conn, ok := cfg.Connections[cfg.ActiveConnection]; ok {
-						conn.GrantType = value
-					}
-				} else {
-					cfg.GrantType = value
+				conn := cfg.Connections[cfg.ActiveConnectionName()]
+				if conn != nil {
+					conn.GrantType = value
 				}
 			case "redirect_uri":
-				if cfg.ActiveConnectionName() != "default" && cfg.Connections != nil {
-					if conn, ok := cfg.Connections[cfg.ActiveConnection]; ok {
-						conn.RedirectURI = value
-					}
-				} else {
-					cfg.RedirectURI = value
+				conn := cfg.Connections[cfg.ActiveConnectionName()]
+				if conn != nil {
+					conn.RedirectURI = value
 				}
 			case "defaults.output":
 				valid := map[string]bool{"table": true, "json": true, "csv": true, "tsv": true}

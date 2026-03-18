@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
@@ -48,65 +47,25 @@ func newConnectionListCmd(f *cmdutil.Factory) *cobra.Command {
 			activeConnName := cfg.ActiveConnectionName()
 			format := cmdutil.GetOutputFormat(cmd, f.IO)
 
-			type connInfo struct {
-				Name     string
-				ClientID string
-				Grant    string
-				Tenant   string
-				Active   bool
-			}
-
-			var conns []connInfo
-
-			// Add default connection if flat fields have a client_id
-			if cfg.ClientID != "" {
-				conns = append(conns, connInfo{
-					Name:     "default",
-					ClientID: cfg.ClientID,
-					Grant:    cfg.GrantType,
-					Tenant:   cfg.ActiveTenant,
-					Active:   activeConnName == "default",
-				})
-			}
-
-			// Add named connections
-			if cfg.Connections != nil {
-				names := make([]string, 0, len(cfg.Connections))
-				for name := range cfg.Connections {
-					names = append(names, name)
-				}
-				sort.Strings(names)
-
-				for _, name := range names {
-					conn := cfg.Connections[name]
-					conns = append(conns, connInfo{
-						Name:     name,
-						ClientID: conn.ClientID,
-						Grant:    conn.GrantType,
-						Tenant:   conn.ActiveTenant,
-						Active:   activeConnName == name,
-					})
-				}
-			}
-
-			if len(conns) == 0 {
+			names := cfg.ConnectionNames()
+			if len(names) == 0 {
 				fmt.Fprintf(f.IO.ErrOut, "No connections configured. Run 'xero connection add <name>' or 'xero auth login'.\n")
 				return nil
 			}
 
-			// Build JSON rows
 			var rows []map[string]any
-			for _, c := range conns {
+			for _, name := range names {
+				conn := cfg.Connections[name]
 				marker := ""
-				if c.Active {
+				if name == activeConnName {
 					marker = "*"
 				}
 				rows = append(rows, map[string]any{
 					"_active":   marker,
-					"name":      c.Name,
-					"client_id": redactSecret(c.ClientID),
-					"grant":     c.Grant,
-					"tenant":    c.Tenant,
+					"name":      name,
+					"client_id": redactSecret(conn.ClientID),
+					"grant":     conn.GrantType,
+					"tenant":    conn.ActiveTenant,
 				})
 			}
 
@@ -140,10 +99,6 @@ func newConnectionAddCmd(f *cmdutil.Factory) *cobra.Command {
   xero connection add staging --client-id def789`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-
-			if name == "default" {
-				return fmt.Errorf("cannot add a connection named \"default\"; the default connection uses the top-level config fields")
-			}
 
 			if err := config.ValidateConnectionName(name); err != nil {
 				return err
@@ -234,17 +189,13 @@ func newConnectionRemoveCmd(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			if name == "default" {
-				return fmt.Errorf("cannot remove the default connection; edit config.toml directly to clear the top-level fields")
-			}
-
 			configPath, _ := cmd.Root().PersistentFlags().GetString("config")
 			cfg, err := config.LoadFile(configPath)
 			if err != nil {
 				return err
 			}
 
-			if cfg.ActiveConnection == name {
+			if cfg.ActiveConnectionName() == name {
 				return fmt.Errorf("cannot remove the active connection %q; switch to another connection first", name)
 			}
 
@@ -273,10 +224,8 @@ func newConnectionSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			if name != "default" {
-				if err := config.ValidateConnectionName(name); err != nil {
-					return err
-				}
+			if err := config.ValidateConnectionName(name); err != nil {
+				return err
 			}
 
 			configPath, _ := cmd.Root().PersistentFlags().GetString("config")
@@ -285,20 +234,13 @@ func newConnectionSwitchCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
-			// Validate that the connection exists
+			if _, ok := cfg.Connections[name]; !ok {
+				return fmt.Errorf("connection %q not found", name)
+			}
+
 			if name == "default" {
-				if cfg.ClientID == "" {
-					return fmt.Errorf("no default connection configured; set client_id in config.toml first")
-				}
-				// Switch back to flat fields
 				cfg.ActiveConnection = ""
 			} else {
-				if cfg.Connections == nil {
-					return fmt.Errorf("connection %q not found", name)
-				}
-				if _, ok := cfg.Connections[name]; !ok {
-					return fmt.Errorf("connection %q not found", name)
-				}
 				cfg.ActiveConnection = name
 			}
 
