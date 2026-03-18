@@ -44,8 +44,55 @@ func newAuthLoginCmd(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 
+			noPrompt, _ := cmd.Root().PersistentFlags().GetBool("no-prompt")
+			canPrompt := f.IO.IsTTY && !noPrompt
+
 			if cfg.ClientID == "" {
-				return fmt.Errorf("client ID not configured; set XERO_CLIENT_ID or add client_id to config.toml")
+				if !canPrompt {
+					return fmt.Errorf("client ID not configured; set XERO_CLIENT_ID or add client_id to config.toml")
+				}
+				fmt.Fprintf(f.IO.ErrOut, "No client_id configured.\n")
+				id, err := cmdutil.PromptString(f.IO, "Enter your Xero Client ID: ")
+				if err != nil {
+					return fmt.Errorf("failed to read client ID: %w", err)
+				}
+				if id == "" {
+					return fmt.Errorf("client ID is required")
+				}
+				cfg.ClientID = id
+			}
+
+			if cfg.ClientSecret == "" && canPrompt {
+				secret, err := cmdutil.PromptSecret(f.IO, "Enter your Xero Client Secret: ")
+				if err != nil {
+					return fmt.Errorf("failed to read client secret: %w", err)
+				}
+				if secret != "" {
+					cfg.ClientSecret = secret
+				}
+			}
+
+			// Offer to save prompted credentials to config file
+			if canPrompt && (cfg.ClientID != "" || cfg.ClientSecret != "") {
+				// Check if these values came from prompting (not already in file/env)
+				fileCfg, _ := config.LoadFile("")
+				envID := os.Getenv("XERO_CLIENT_ID")
+				envSecret := os.Getenv("XERO_CLIENT_SECRET")
+				needsSave := (fileCfg.ClientID == "" && envID == "" && cfg.ClientID != "") ||
+					(fileCfg.ClientSecret == "" && envSecret == "" && cfg.ClientSecret != "")
+
+				if needsSave {
+					if cmdutil.PromptConfirmDefault(f.IO, "Save to config file?") {
+						fileCfg.ClientID = cfg.ClientID
+						fileCfg.ClientSecret = cfg.ClientSecret
+						if err := fileCfg.Save(); err != nil {
+							fmt.Fprintf(f.IO.ErrOut, "Warning: could not save config: %v\n", err)
+						} else {
+							path, _ := config.ConfigPath()
+							fmt.Fprintf(f.IO.ErrOut, "Saved to %s\n", path)
+						}
+					}
+				}
 			}
 
 			headless, _ := cmd.Flags().GetBool("headless")
