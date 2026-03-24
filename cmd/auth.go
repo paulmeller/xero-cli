@@ -292,8 +292,7 @@ func newAuthRefreshCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			oauthCfg := auth.OAuthConfig(conn)
-			ts := oauthCfg.TokenSource(cmd.Context(), tok)
-			pts := auth.NewPersistentTokenSource(ts, connName)
+			pts := auth.NewPersistentTokenSourceWithConfig(oauthCfg, tok, connName)
 
 			newTok, err := pts.Token()
 			if err != nil {

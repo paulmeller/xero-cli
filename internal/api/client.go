@@ -192,7 +192,11 @@ func NewClientFromConfig(cfg *config.Config) (*Client, error) {
 			return nil, fmt.Errorf("not authenticated; run 'xero auth login': %w", err)
 		}
 		oauthCfg := auth.OAuthConfig(conn)
-		tokenSource = oauthCfg.TokenSource(context.Background(), underlying)
+		// Use WithConfig so PersistentTokenSource can rebuild the token source
+		// with the latest refresh token from storage (Xero tokens are single-use).
+		pts := auth.NewPersistentTokenSourceWithConfig(oauthCfg, underlying, connName)
+		httpClient := oauth2.NewClient(context.Background(), pts)
+		return NewClient(httpClient, conn.ActiveTenant, false, false, io.Discard), nil
 	}
 
 	pts := auth.NewPersistentTokenSource(tokenSource, connName)

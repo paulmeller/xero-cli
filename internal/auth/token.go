@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,9 +27,13 @@ func keyringUserFor(connectionName string) string {
 
 // PersistentTokenSource implements oauth2.TokenSource with disk persistence.
 // It wraps an underlying token source and saves tokens atomically on refresh.
+// It always reloads the latest token from storage before refreshing, because
+// Xero refresh tokens are single-use — another CLI invocation may have already
+// rotated it.
 type PersistentTokenSource struct {
 	mu             sync.Mutex
 	underlying     oauth2.TokenSource
+	oauthCfg       *oauth2.Config // kept so we can rebuild token source with latest refresh token
 	cached         *oauth2.Token
 	connectionName string
 }
@@ -40,14 +45,28 @@ func NewPersistentTokenSource(underlying oauth2.TokenSource, connectionName stri
 	}
 }
 
+// NewPersistentTokenSourceWithConfig creates a PersistentTokenSource that can
+// rebuild its underlying token source using the latest refresh token from storage.
+// This is critical for Xero's single-use refresh tokens.
+func NewPersistentTokenSourceWithConfig(oauthCfg *oauth2.Config, initial *oauth2.Token, connectionName string) *PersistentTokenSource {
+	return &PersistentTokenSource{
+		underlying:     oauthCfg.TokenSource(context.Background(), initial),
+		oauthCfg:       oauthCfg,
+		cached:         initial,
+		connectionName: connectionName,
+	}
+}
+
 func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Try loading from storage if we have no cached token
-	if s.cached == nil {
-		t, _ := LoadToken(s.connectionName)
-		s.cached = t
+	// Always load the latest token from storage — another CLI invocation
+	// may have refreshed it since we last ran, and Xero refresh tokens
+	// are single-use (the old one is invalidated on each refresh).
+	stored, _ := LoadToken(s.connectionName)
+	if stored != nil {
+		s.cached = stored
 	}
 
 	// If cached token is valid, return it
@@ -55,7 +74,19 @@ func (s *PersistentTokenSource) Token() (*oauth2.Token, error) {
 		return s.cached, nil
 	}
 
-	// Get a new token from the underlying source
+	// Need to refresh — rebuild the token source with the latest refresh token
+	// so we don't use a stale single-use refresh token.
+	if s.cached == nil || s.cached.RefreshToken == "" {
+		if s.underlying == nil {
+			return nil, fmt.Errorf("no valid token and no token source configured; run 'xero auth login'")
+		}
+	}
+
+	if s.oauthCfg != nil && s.cached != nil && s.cached.RefreshToken != "" {
+		// Create a fresh token source using the latest refresh token
+		s.underlying = s.oauthCfg.TokenSource(context.Background(), s.cached)
+	}
+
 	if s.underlying == nil {
 		return nil, fmt.Errorf("no valid token and no token source configured; run 'xero auth login'")
 	}
