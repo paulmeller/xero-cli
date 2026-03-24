@@ -248,6 +248,17 @@ func (c *Client) SetTenantID(id string) {
 	}
 }
 
+// GetPDF performs a GET request with Accept: application/pdf and returns the raw bytes.
+func (c *Client) GetPDF(ctx context.Context, path string) ([]byte, error) {
+	u := c.buildURL(path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/pdf")
+	return c.doBytes(req)
+}
+
 // Get performs a GET request and returns raw JSON.
 func (c *Client) Get(ctx context.Context, path string, params url.Values) (json.RawMessage, error) {
 	u := c.buildURL(path, params)
@@ -417,6 +428,26 @@ func (c *Client) do(req *http.Request) (json.RawMessage, error) {
 	}
 
 	return json.RawMessage(body), nil
+}
+
+func (c *Client) doBytes(req *http.Request) ([]byte, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		xerr := ParseXeroError(resp.StatusCode, bytes.NewReader(body))
+		return nil, xerr
+	}
+
+	return body, nil
 }
 
 func (c *Client) doRaw(req *http.Request) (json.RawMessage, error) {

@@ -43,6 +43,7 @@ func newInvoicesCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(newInvoicesOnlineURLCmd(f))
 	cmd.AddCommand(newInvoicesHistoryCmd(f))
 	cmd.AddCommand(newInvoicesAttachCmd(f))
+	cmd.AddCommand(newInvoicesPDFCmd(f))
 
 	return cmd
 }
@@ -623,6 +624,54 @@ func parseLineItem(s string) (api.LineItem, error) {
 	}
 
 	return li, nil
+}
+
+func newInvoicesPDFCmd(f *cmdutil.Factory) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pdf <invoice-id>",
+		Short: "Download an invoice as PDF",
+		Example: `  xero invoices pdf <invoice-id>
+  xero invoices pdf <invoice-id> -o invoice.pdf`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := f.APIClient()
+			if err != nil {
+				return err
+			}
+			cmdutil.ApplyClientFlags(cmd, client, f)
+
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			data, err := client.GetPDF(cmd.Context(), path)
+			if err != nil {
+				return err
+			}
+
+			outPath, _ := cmd.Flags().GetString("out")
+			if outPath == "" {
+				// Default filename: INV-<id>.pdf
+				outPath = fmt.Sprintf("invoice-%s.pdf", args[0])
+			}
+
+			if outPath == "-" {
+				_, err = os.Stdout.Write(data)
+				return err
+			}
+
+			if err := os.WriteFile(outPath, data, 0644); err != nil {
+				return fmt.Errorf("cannot write PDF: %w", err)
+			}
+
+			quiet, _ := cmd.Root().PersistentFlags().GetBool("quiet")
+			if !quiet {
+				fmt.Fprintf(f.IO.ErrOut, "Saved %s (%d bytes)\n", outPath, len(data))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().String("out", "", "Output file path (default: invoice-<id>.pdf, use - for stdout)")
+
+	return cmd
 }
 
 func outputInvoiceResult(f *cmdutil.Factory, cmd *cobra.Command, result json.RawMessage) error {
