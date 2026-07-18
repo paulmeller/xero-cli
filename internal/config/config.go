@@ -253,15 +253,31 @@ func newDefaults() *Config {
 	return &Config{
 		RedirectURI: "http://localhost:8472/callback",
 		Scopes: []string{
-			"openid", "offline_access",
+			// Identity
+			"openid", "offline_access", "profile", "email",
+			// Accounting – transactions
 			"accounting.invoices", "accounting.payments", "accounting.banktransactions",
-			"accounting.manualjournals", "accounting.settings", "accounting.contacts",
-			"accounting.attachments",
+			"accounting.manualjournals",
+			// Accounting – non-transaction
+			"accounting.settings", "accounting.contacts", "accounting.attachments",
+			"accounting.budgets.read",
+			// Accounting – reports
 			"accounting.reports.aged.read", "accounting.reports.balancesheet.read",
 			"accounting.reports.banksummary.read", "accounting.reports.budgetsummary.read",
 			"accounting.reports.executivesummary.read", "accounting.reports.profitandloss.read",
 			"accounting.reports.trialbalance.read", "accounting.reports.taxreports.read",
-			"accounting.reports.tenninetynine.read", "accounting.budgets.read",
+			"accounting.reports.tenninetynine.read",
+			// Payroll
+			"payroll.employees", "payroll.payruns", "payroll.payslip",
+			"payroll.settings", "payroll.timesheets",
+			// Other APIs
+			"files", "assets", "projects",
+			// NOT available on the Starter plan (Xero rejects with invalid_scope):
+			// accounting.journals.read (Advanced plan), accounting.classicexpenses,
+			// finance.* (Financial services partner program), and the broad
+			// accounting.transactions / accounting.reports.read scopes.
+			// app.connections passes scope validation but consent fails with
+			// access_denied "Requested wrong apps scopes" — don't request it.
 		},
 		Defaults: Defaults{
 			Output:   "table",
