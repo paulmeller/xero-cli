@@ -89,6 +89,7 @@ Enable shell completions: xero completion --help`,
 	rootCmd.AddCommand(newAccountsCmd(f))
 	rootCmd.AddCommand(newCreditNotesCmd(f))
 	rootCmd.AddCommand(newBankTransactionsCmd(f))
+	rootCmd.AddCommand(newBankTransfersCmd(f))
 	rootCmd.AddCommand(newPurchaseOrdersCmd(f))
 	rootCmd.AddCommand(newItemsCmd(f))
 	rootCmd.AddCommand(newManualJournalsCmd(f))

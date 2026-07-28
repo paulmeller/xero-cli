@@ -37,6 +37,7 @@ type ResourceDef struct {
 	HasAllocate   bool
 	HasArchive    bool
 	ReadOnly      bool
+	CreateUsesPut bool // Xero creates this resource via PUT (e.g. Accounts); POST is update-only
 }
 
 // ListOpts configures a list command.
@@ -238,13 +239,17 @@ func NewCreateCmd(f *Factory, def ResourceDef) *cobra.Command {
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
 			var result json.RawMessage
+			var wrapped map[string]json.RawMessage
 			if IsBatchInput(input) {
 				// Wrap array in the resource key for Xero API
-				wrapped := map[string]json.RawMessage{def.JSONKey: input}
-				result, err = client.Post(cmd.Context(), def.APIPath, wrapped, idempotencyKey)
+				wrapped = map[string]json.RawMessage{def.JSONKey: input}
 			} else {
 				// Single item - wrap in the resource key
-				wrapped := map[string]json.RawMessage{def.JSONKey: json.RawMessage("[" + string(input) + "]")}
+				wrapped = map[string]json.RawMessage{def.JSONKey: json.RawMessage("[" + string(input) + "]")}
+			}
+			if def.CreateUsesPut {
+				result, err = client.Put(cmd.Context(), def.APIPath, wrapped)
+			} else {
 				result, err = client.Post(cmd.Context(), def.APIPath, wrapped, idempotencyKey)
 			}
 			if err != nil {

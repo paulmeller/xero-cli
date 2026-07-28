@@ -8,6 +8,7 @@ const (
 	PathPayments           = "Payments"
 	PathCreditNotes        = "CreditNotes"
 	PathBankTransactions   = "BankTransactions"
+	PathBankTransfers      = "BankTransfers"
 	PathPurchaseOrders     = "PurchaseOrders"
 	PathItems              = "Items"
 	PathManualJournals     = "ManualJournals"

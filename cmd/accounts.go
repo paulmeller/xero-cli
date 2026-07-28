@@ -24,11 +24,12 @@ func newAccountsCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "STATUS", Path: "Status", Format: "status"},
 			{Header: "TAX TYPE", Path: "TaxType"},
 		},
-		HasCreate:  true,
-		HasUpdate:  true,
-		HasDelete:  true,
-		HasAttach:  true,
-		HasArchive: true,
+		HasCreate:     true,
+		HasUpdate:     true,
+		HasDelete:     true,
+		HasAttach:     true,
+		HasArchive:    true,
+		CreateUsesPut: true,
 	}
 
 	return cmdutil.NewResourceCmd(f, def)

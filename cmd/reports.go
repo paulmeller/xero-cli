@@ -25,6 +25,7 @@ func newReportsCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(newReportCmd(f, "aged-receivables", "AgedReceivablesByContact"))
 	cmd.AddCommand(newReportCmd(f, "aged-payables", "AgedPayablesByContact"))
 	cmd.AddCommand(newReportCmd(f, "bank-summary", "BankSummary"))
+	cmd.AddCommand(newReportCmd(f, "bank-statement", "BankStatement"))
 	cmd.AddCommand(newReportCmd(f, "budget-summary", "BudgetSummary"))
 	cmd.AddCommand(newReportCmd(f, "executive-summary", "ExecutiveSummary"))
 	cmd.AddCommand(newReportCmd(f, "gst", "GST"))
@@ -56,6 +57,9 @@ func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Comman
 			}
 			if v, _ := cmd.Flags().GetString("timeframe"); v != "" {
 				params.Set("timeframe", v)
+			}
+			if v, _ := cmd.Flags().GetString("bank-account-id"); v != "" {
+				params.Set("bankAccountID", v)
 			}
 			if v, _ := cmd.Flags().GetString("tracking-category-id"); v != "" {
 				params.Set("trackingCategoryID", v)
@@ -91,6 +95,7 @@ func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Comman
 	cmd.Flags().String("to-date", "", "Report end date (YYYY-MM-DD)")
 	cmd.Flags().String("periods", "", "Number of periods")
 	cmd.Flags().String("timeframe", "", "Period size: MONTH, QUARTER, YEAR")
+	cmd.Flags().String("bank-account-id", "", "Bank account ID (required for bank-statement)")
 	cmd.Flags().String("tracking-category-id", "", "Tracking category ID filter")
 	cmd.Flags().String("tracking-option-id", "", "Tracking option ID filter")
 	cmd.Flags().Bool("standard-layout", false, "Use standard layout")
