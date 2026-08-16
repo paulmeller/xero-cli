@@ -226,11 +226,21 @@ func (c *Client) SetVerbose(verbose bool, errOut io.Writer) {
 	}
 }
 
-// SetDryRun enables dry-run mode.
-func (c *Client) SetDryRun(dryRun bool) {
+// SetDryRun enables dry-run mode. errOut is where "[dry-run] Would send ..." lines are
+// written; it takes its own writer rather than reusing whatever SetVerbose set (or the
+// io.Discard every constructor defaults to), because dry-run output must be visible whether
+// or not --verbose is also set — previously a dry-run without --verbose wrote to io.Discard
+// and returned a fake 200 {}, which was indistinguishable from a real empty response.
+func (c *Client) SetDryRun(dryRun bool, errOut io.Writer) {
 	c.dryRun = dryRun
+	if errOut != nil {
+		c.errOut = errOut
+	}
 	if t, ok := c.http.Transport.(*xeroTransport); ok {
 		t.dryRun = dryRun
+		if errOut != nil {
+			t.errOut = errOut
+		}
 	}
 }
 
@@ -238,6 +248,12 @@ func (c *Client) SetDryRun(dryRun bool) {
 func (c *Client) SetTimeout(d time.Duration) {
 	c.timeout = d
 	c.http.Timeout = d
+}
+
+// SetBaseURL overrides the API base URL (default: BaseURL). Used by tests in other packages to
+// point the client at an httptest server, since baseURL is otherwise unexported.
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
 }
 
 // SetTenantID overrides the tenant ID.
@@ -261,8 +277,7 @@ func (c *Client) GetPDF(ctx context.Context, path string) ([]byte, error) {
 
 // Get performs a GET request and returns raw JSON.
 func (c *Client) Get(ctx context.Context, path string, params url.Values) (json.RawMessage, error) {
-	u := c.buildURL(path, params)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := c.newGetRequest(ctx, path, params)
 	if err != nil {
 		return nil, err
 	}
@@ -271,12 +286,42 @@ func (c *Client) Get(ctx context.Context, path string, params url.Values) (json.
 
 // GetWithHeaders performs a GET request and returns raw JSON plus response headers.
 func (c *Client) GetWithHeaders(ctx context.Context, path string, params url.Values) (json.RawMessage, http.Header, error) {
-	u := c.buildURL(path, params)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := c.newGetRequest(ctx, path, params)
 	if err != nil {
 		return nil, nil, err
 	}
 	return c.doWithHeaders(req)
+}
+
+// newGetRequest builds a GET request. Xero's modified-since filter is a real HTTP header
+// (If-Modified-Since), not a query parameter - BuildListParams stashes the value under the
+// "If-Modified-Since" key in params as a convenient carrier, and this pulls it back out onto
+// the request header where Xero actually reads it. Previously it was sent as a literal
+// "?If-Modified-Since=..." query string parameter, which Xero silently ignores, making
+// --modified-since a silent no-op.
+func (c *Client) newGetRequest(ctx context.Context, path string, params url.Values) (*http.Request, error) {
+	var ifModifiedSince string
+	if params != nil {
+		if v := params.Get("If-Modified-Since"); v != "" {
+			cloned := make(url.Values, len(params))
+			for k, vals := range params {
+				cloned[k] = append([]string(nil), vals...)
+			}
+			cloned.Del("If-Modified-Since")
+			params = cloned
+			ifModifiedSince = v
+		}
+	}
+
+	u := c.buildURL(path, params)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if ifModifiedSince != "" {
+		req.Header.Set("If-Modified-Since", ifModifiedSince)
+	}
+	return req, nil
 }
 
 // GetRaw performs a GET to an arbitrary URL (e.g. /connections).
@@ -339,8 +384,11 @@ func (c *Client) PostRaw(ctx context.Context, path string, data json.RawMessage,
 	return c.do(req)
 }
 
-// Put performs a PUT request with JSON body.
-func (c *Client) Put(ctx context.Context, path string, body any) (json.RawMessage, error) {
+// Put performs a PUT request with JSON body and idempotency key. Xero supports
+// Idempotency-Key on PUT-create endpoints (e.g. createAccount, createBankTransfer) the same
+// way it does on POST; the transport retries on network errors/429/5xx and replays this exact
+// body via GetBody, so a request without a stable key risks duplicate creation on retry.
+func (c *Client) Put(ctx context.Context, path string, body any, idempotencyKey string) (json.RawMessage, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("cannot marshal request body: %w", err)
@@ -356,11 +404,16 @@ func (c *Client) Put(ctx context.Context, path string, body any) (json.RawMessag
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
 
+	if idempotencyKey == "" {
+		idempotencyKey = uuid.New().String()
+	}
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+
 	return c.do(req)
 }
 
-// PutRaw puts raw JSON bytes.
-func (c *Client) PutRaw(ctx context.Context, path string, data json.RawMessage) (json.RawMessage, error) {
+// PutRaw puts raw JSON bytes with idempotency key. See Put for why this is required on retry.
+func (c *Client) PutRaw(ctx context.Context, path string, data json.RawMessage, idempotencyKey string) (json.RawMessage, error) {
 	u := c.buildURL(path, nil)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(data))
 	if err != nil {
@@ -370,6 +423,11 @@ func (c *Client) PutRaw(ctx context.Context, path string, data json.RawMessage) 
 	req.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
+
+	if idempotencyKey == "" {
+		idempotencyKey = uuid.New().String()
+	}
+	req.Header.Set("Idempotency-Key", idempotencyKey)
 
 	return c.do(req)
 }

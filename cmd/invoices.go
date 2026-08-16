@@ -203,7 +203,7 @@ func newInvoicesGetCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -320,7 +320,7 @@ func newInvoicesUpdateCmd(f *cmdutil.Factory) *cobra.Command {
 				// Wrap raw input in {"Invoices": [...]} envelope — Xero requires this
 				wrapped := json.RawMessage(`{"Invoices":[` + string(input) + `]}`)
 
-				path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+				path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 				result, err := client.PostRaw(cmd.Context(), path, wrapped, "")
 				if err != nil {
 					return err
@@ -348,7 +348,7 @@ func newInvoicesUpdateCmd(f *cmdutil.Factory) *cobra.Command {
 				body["DueDate"] = dueDate
 			}
 
-			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 			result, err := client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -386,7 +386,7 @@ func newInvoicesDeleteCmd(f *cmdutil.Factory) *cobra.Command {
 				"InvoiceID": args[0],
 				"Status":    "DELETED",
 			}
-			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 			_, err = client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -425,7 +425,7 @@ func newInvoicesVoidCmd(f *cmdutil.Factory) *cobra.Command {
 				"InvoiceID": args[0],
 				"Status":    "VOIDED",
 			}
-			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 			_, err = client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -456,7 +456,7 @@ func newInvoicesEmailCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/Email", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s/Email", api.PathInvoices, url.PathEscape(args[0]))
 			_, err = client.Post(cmd.Context(), path, nil, "")
 			if err != nil {
 				return err
@@ -483,7 +483,7 @@ func newInvoicesOnlineURLCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/OnlineInvoice", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s/OnlineInvoice", api.PathInvoices, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -514,7 +514,7 @@ func newInvoicesHistoryCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/History", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s/History", api.PathInvoices, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -542,7 +542,7 @@ func newInvoicesAttachCmd(f *cmdutil.Factory) *cobra.Command {
 
 			filePath := args[1]
 			fileName := filepath.Base(filePath)
-			path := fmt.Sprintf("%s/%s/Attachments/%s", api.PathInvoices, args[0], fileName)
+			path := fmt.Sprintf("%s/%s/Attachments/%s", api.PathInvoices, url.PathEscape(args[0]), url.PathEscape(fileName))
 
 			data, err := os.ReadFile(filePath)
 			if err != nil {
@@ -640,7 +640,7 @@ func newInvoicesPDFCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", api.PathInvoices, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathInvoices, url.PathEscape(args[0]))
 			data, err := client.GetPDF(cmd.Context(), path)
 			if err != nil {
 				return err

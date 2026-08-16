@@ -21,6 +21,10 @@ func newBatchPaymentsCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "STATUS", Path: "Status", Format: "status"},
 		},
 		HasCreate: true, HasDelete: true,
+		// Xero's BatchPayments collection is create-via-PUT; POST on this collection maps to
+		// deleteBatchPayment, not update - routing create through POST silently deletes instead.
+		CreateUsesPut:     true,
+		PutBatchSupported: true, // "Creates one or many batch payments" per the OpenAPI spec
 	}
 	return cmdutil.NewResourceCmd(f, def)
 }

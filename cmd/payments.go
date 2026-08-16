@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
@@ -142,7 +143,7 @@ func newPaymentDeleteCmd(f *cmdutil.Factory) *cobra.Command {
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
 			body := map[string]string{"Status": "DELETED"}
-			path := fmt.Sprintf("%s/%s", api.PathPayments, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathPayments, url.PathEscape(args[0]))
 			_, err = client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err

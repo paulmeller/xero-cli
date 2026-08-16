@@ -178,7 +178,7 @@ func newContactsGetCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", api.PathContacts, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathContacts, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -297,7 +297,7 @@ func newContactsUpdateCmd(f *cmdutil.Factory) *cobra.Command {
 			// Wrap raw input in {"Contacts": [...]} envelope — Xero requires this
 			wrapped := json.RawMessage(`{"Contacts":[` + string(input) + `]}`)
 
-			path := fmt.Sprintf("%s/%s", api.PathContacts, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathContacts, url.PathEscape(args[0]))
 			result, err := client.PostRaw(cmd.Context(), path, wrapped, "")
 			if err != nil {
 				return err
@@ -328,7 +328,7 @@ func newContactsArchiveCmd(f *cmdutil.Factory) *cobra.Command {
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
 			body := map[string]any{"ContactStatus": "ARCHIVED"}
-			path := fmt.Sprintf("%s/%s", api.PathContacts, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathContacts, url.PathEscape(args[0]))
 			_, err = client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -359,7 +359,7 @@ func newContactsHistoryCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/History", api.PathContacts, args[0])
+			path := fmt.Sprintf("%s/%s/History", api.PathContacts, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err

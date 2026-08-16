@@ -229,5 +229,12 @@ enabled = true
 sync_mode = "incremental"
 cursor_field = "UpdatedDateUTC"
 primary_key = "LinkedTransactionID"
+
+[[streams]]
+name = "bank_transfers"
+enabled = true
+sync_mode = "full_refresh"
+cursor_field = ""
+primary_key = "BankTransferID"
 `
 }

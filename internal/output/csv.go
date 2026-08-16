@@ -27,7 +27,7 @@ func (f *CSVFormatter) FormatList(w io.Writer, items gjson.Result, columns []Col
 		row := make([]string, len(columns))
 		for i, col := range columns {
 			val := item.Get(col.Path)
-			row[i] = convertXeroDate(val.String())
+			row[i] = formatPlainValue(val.String(), col.Format)
 		}
 		if err := cw.Write(row); err != nil {
 			writeErr = err
@@ -51,7 +51,7 @@ func (f *CSVFormatter) FormatOne(w io.Writer, item gjson.Result, columns []Colum
 	for i, col := range columns {
 		headers[i] = col.Header
 		val := item.Get(col.Path)
-		values[i] = convertXeroDate(val.String())
+		values[i] = formatPlainValue(val.String(), col.Format)
 	}
 
 	if err := cw.Write(headers); err != nil {

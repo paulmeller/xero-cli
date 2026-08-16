@@ -22,10 +22,14 @@ func newBankTransfersCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "FROM", Path: "FromBankAccount.Name"},
 			{Header: "TO", Path: "ToBankAccount.Name"},
 		},
-		HasCreate:     true,
-		HasHistory:    true,
-		HasAttach:     true,
-		CreateUsesPut: true,
+		HasCreate:         true,
+		HasHistory:        true,
+		HasAttach:         true,
+		CreateUsesPut:     true,
+		PutBatchSupported: true, // Xero's BankTransfers PUT accepts a batched array
+		// Xero's GET /BankTransfers has no page/pageSize support at all - a single call already
+		// returns the full result set, so `list --all` must not loop through PaginateAll.
+		NoPagination: true,
 	}
 
 	return cmdutil.NewResourceCmd(f, def)

@@ -24,12 +24,13 @@ func newAccountsCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "STATUS", Path: "Status", Format: "status"},
 			{Header: "TAX TYPE", Path: "TaxType"},
 		},
-		HasCreate:     true,
-		HasUpdate:     true,
-		HasDelete:     true,
-		HasAttach:     true,
-		HasArchive:    true,
-		CreateUsesPut: true,
+		HasCreate:       true,
+		HasUpdate:       true,
+		HasDelete:       true,
+		HasAttach:       true,
+		HasArchive:      true,
+		CreateUsesPut:   true,
+		CreateUnwrapped: true, // Xero's createAccount PUT body is a bare Account object, not {"Accounts":[...]}
 	}
 
 	return cmdutil.NewResourceCmd(f, def)

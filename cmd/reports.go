@@ -19,22 +19,26 @@ func newReportsCmd(f *cmdutil.Factory) *cobra.Command {
 		Short: "Financial reports",
 	}
 
-	cmd.AddCommand(newReportCmd(f, "profit-and-loss", "ProfitAndLoss"))
-	cmd.AddCommand(newReportCmd(f, "balance-sheet", "BalanceSheet"))
-	cmd.AddCommand(newReportCmd(f, "trial-balance", "TrialBalance"))
-	cmd.AddCommand(newReportCmd(f, "aged-receivables", "AgedReceivablesByContact"))
-	cmd.AddCommand(newReportCmd(f, "aged-payables", "AgedPayablesByContact"))
-	cmd.AddCommand(newReportCmd(f, "bank-summary", "BankSummary"))
-	cmd.AddCommand(newReportCmd(f, "bank-statement", "BankStatement"))
-	cmd.AddCommand(newReportCmd(f, "budget-summary", "BudgetSummary"))
-	cmd.AddCommand(newReportCmd(f, "executive-summary", "ExecutiveSummary"))
-	cmd.AddCommand(newReportCmd(f, "gst", "GST"))
-	cmd.AddCommand(newReportCmd(f, "1099", "TenNinetyNine"))
+	cmd.AddCommand(newReportCmd(f, "profit-and-loss", "ProfitAndLoss", false))
+	cmd.AddCommand(newReportCmd(f, "balance-sheet", "BalanceSheet", false))
+	cmd.AddCommand(newReportCmd(f, "trial-balance", "TrialBalance", false))
+	cmd.AddCommand(newReportCmd(f, "aged-receivables", "AgedReceivablesByContact", false))
+	cmd.AddCommand(newReportCmd(f, "aged-payables", "AgedPayablesByContact", false))
+	cmd.AddCommand(newReportCmd(f, "bank-summary", "BankSummary", false))
+	cmd.AddCommand(newReportCmd(f, "bank-statement", "BankStatement", true))
+	cmd.AddCommand(newReportCmd(f, "budget-summary", "BudgetSummary", false))
+	cmd.AddCommand(newReportCmd(f, "executive-summary", "ExecutiveSummary", false))
+	cmd.AddCommand(newReportCmd(f, "gst", "GST", false))
+	cmd.AddCommand(newReportCmd(f, "1099", "TenNinetyNine", false))
 
 	return cmd
 }
 
-func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Command {
+// needsBankAccount is true only for bank-statement, the one report Xero requires a
+// bankAccountID for. Previously every report registered --bank-account-id unconditionally,
+// so it showed up in --help for reports where it does nothing, and bank-statement never
+// enforced that it was actually supplied.
+func newReportCmd(f *cmdutil.Factory, use string, reportID string, needsBankAccount bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: fmt.Sprintf("Run %s report", strings.ReplaceAll(use, "-", " ")),
@@ -58,7 +62,8 @@ func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Comman
 			if v, _ := cmd.Flags().GetString("timeframe"); v != "" {
 				params.Set("timeframe", v)
 			}
-			if v, _ := cmd.Flags().GetString("bank-account-id"); v != "" {
+			if needsBankAccount {
+				v, _ := cmd.Flags().GetString("bank-account-id")
 				params.Set("bankAccountID", v)
 			}
 			if v, _ := cmd.Flags().GetString("tracking-category-id"); v != "" {
@@ -86,8 +91,7 @@ func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Comman
 				return formatter.FormatOne(f.IO.Out, gjson.ParseBytes(data), nil)
 			}
 
-			// Render report in table format
-			return renderReport(f, data)
+			return renderReport(f, data, format)
 		},
 	}
 
@@ -95,16 +99,24 @@ func newReportCmd(f *cmdutil.Factory, use string, reportID string) *cobra.Comman
 	cmd.Flags().String("to-date", "", "Report end date (YYYY-MM-DD)")
 	cmd.Flags().String("periods", "", "Number of periods")
 	cmd.Flags().String("timeframe", "", "Period size: MONTH, QUARTER, YEAR")
-	cmd.Flags().String("bank-account-id", "", "Bank account ID (required for bank-statement)")
 	cmd.Flags().String("tracking-category-id", "", "Tracking category ID filter")
 	cmd.Flags().String("tracking-option-id", "", "Tracking option ID filter")
 	cmd.Flags().Bool("standard-layout", false, "Use standard layout")
 	cmd.Flags().Bool("payments-only", false, "Cash basis")
 
+	if needsBankAccount {
+		cmd.Flags().String("bank-account-id", "", "Bank account ID (required)")
+		cmd.MarkFlagRequired("bank-account-id")
+	}
+
 	return cmd
 }
 
-func renderReport(f *cmdutil.Factory, data []byte) error {
+func renderReport(f *cmdutil.Factory, data []byte, format string) error {
+	// Prose (title, section headers) is only safe to interleave with the data rows in the
+	// human-readable table view - injecting free text into a csv/tsv stream would corrupt it.
+	prose := format == "table" || format == ""
+
 	parsed := gjson.ParseBytes(data)
 	reports := parsed.Get("Reports")
 	if !reports.Exists() {
@@ -125,10 +137,12 @@ func renderReport(f *cmdutil.Factory, data []byte) error {
 	}
 
 	// Print report title
-	title := report.Get("ReportName").String()
-	if title != "" {
-		fmt.Fprintf(f.IO.Out, "%s\n", title)
-		fmt.Fprintf(f.IO.Out, "%s\n\n", strings.Repeat("=", len(title)))
+	if prose {
+		title := report.Get("ReportName").String()
+		if title != "" {
+			fmt.Fprintf(f.IO.Out, "%s\n", title)
+			fmt.Fprintf(f.IO.Out, "%s\n\n", strings.Repeat("=", len(title)))
+		}
 	}
 
 	// Build dynamic columns from the report's header row
@@ -171,9 +185,11 @@ func renderReport(f *cmdutil.Factory, data []byte) error {
 		rowType := row.Get("RowType").String()
 		switch rowType {
 		case "Section":
-			sectionTitle := row.Get("Title").String()
-			if sectionTitle != "" {
-				fmt.Fprintf(f.IO.Out, "\n%s\n", sectionTitle)
+			if prose {
+				sectionTitle := row.Get("Title").String()
+				if sectionTitle != "" {
+					fmt.Fprintf(f.IO.Out, "\n%s\n", sectionTitle)
+				}
 			}
 			row.Get("Rows").ForEach(func(_, subRow gjson.Result) bool {
 				dataRows = append(dataRows, subRow)
@@ -198,6 +214,6 @@ func renderReport(f *cmdutil.Factory, data []byte) error {
 	}
 	rowsJSON = append(rowsJSON, ']')
 
-	formatter := f.Formatter("table")
+	formatter := f.Formatter(format)
 	return formatter.FormatList(f.IO.Out, gjson.ParseBytes(rowsJSON), columns)
 }

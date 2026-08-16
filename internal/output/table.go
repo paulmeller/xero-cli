@@ -60,19 +60,23 @@ func (f *TableFormatter) FormatOne(w io.Writer, item gjson.Result, columns []Col
 }
 
 func (f *TableFormatter) formatValue(val string, format string) string {
-	// Convert Xero dates
-	val = convertXeroDate(val)
-
-	switch format {
-	case "status":
-		return f.colorStatus(val)
-	case "currency":
-		return formatCurrency(val)
-	case "date":
-		return val
-	default:
-		return val
+	if format == "status" {
+		return f.colorStatus(convertXeroDate(val))
 	}
+	return formatPlainValue(val, format)
+}
+
+// formatPlainValue applies date conversion and format hints (e.g. "currency") with no color
+// codes, so it's safe for any output - CSV and TSV share this with the table formatter's
+// non-status path; previously they only ran convertXeroDate and ignored Column.Format entirely,
+// so a "currency" column exported raw unrounded JSON numbers (e.g. "123.4" instead of "123.40")
+// instead of matching what the table formatter shows for the same data.
+func formatPlainValue(val, format string) string {
+	val = convertXeroDate(val)
+	if format == "currency" {
+		val = formatCurrency(val)
+	}
+	return val
 }
 
 func (f *TableFormatter) colorStatus(status string) string {

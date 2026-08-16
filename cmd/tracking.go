@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
@@ -71,7 +72,7 @@ func newTrackingGetCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -104,8 +105,10 @@ func newTrackingCreateCmd(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("--name is required")
 			}
 
+			// Xero's TrackingCategories collection is create-via-PUT; the update sub-command
+			// below correctly uses POST on the element-scoped path.
 			body := api.TrackingCategory{Name: name}
-			result, err := client.Post(cmd.Context(), api.PathTrackingCategories, body, "")
+			result, err := client.Put(cmd.Context(), api.PathTrackingCategories, body, "")
 			if err != nil {
 				return err
 			}
@@ -138,7 +141,7 @@ func newTrackingUpdateCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			body := api.TrackingCategory{Name: name}
-			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, url.PathEscape(args[0]))
 			result, err := client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -170,7 +173,7 @@ func newTrackingDeleteCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, args[0])
+			path := fmt.Sprintf("%s/%s", api.PathTrackingCategories, url.PathEscape(args[0]))
 			_, err = client.Delete(cmd.Context(), path)
 			if err != nil {
 				return err
@@ -219,8 +222,8 @@ func newTrackingOptionAddCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			body := api.TrackingOption{Name: name}
-			path := fmt.Sprintf("%s/%s/Options", api.PathTrackingCategories, args[0])
-			result, err := client.Put(cmd.Context(), path, body)
+			path := fmt.Sprintf("%s/%s/Options", api.PathTrackingCategories, url.PathEscape(args[0]))
+			result, err := client.Put(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
 			}
@@ -253,7 +256,7 @@ func newTrackingOptionUpdateCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 
 			body := api.TrackingOption{Name: name}
-			path := fmt.Sprintf("%s/%s/Options/%s", api.PathTrackingCategories, args[0], args[1])
+			path := fmt.Sprintf("%s/%s/Options/%s", api.PathTrackingCategories, url.PathEscape(args[0]), url.PathEscape(args[1]))
 			result, err := client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
@@ -285,7 +288,7 @@ func newTrackingOptionDeleteCmd(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmdutil.ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/Options/%s", api.PathTrackingCategories, args[0], args[1])
+			path := fmt.Sprintf("%s/%s/Options/%s", api.PathTrackingCategories, url.PathEscape(args[0]), url.PathEscape(args[1]))
 			_, err = client.Delete(cmd.Context(), path)
 			if err != nil {
 				return err

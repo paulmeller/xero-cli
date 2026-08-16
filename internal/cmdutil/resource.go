@@ -38,6 +38,23 @@ type ResourceDef struct {
 	HasArchive    bool
 	ReadOnly      bool
 	CreateUsesPut bool // Xero creates this resource via PUT (e.g. Accounts); POST is update-only
+
+	// PutBatchSupported is only meaningful when CreateUsesPut is true. Most PUT-create
+	// endpoints (Accounts, Currencies, TrackingCategories, LinkedTransactions) accept exactly
+	// one object per call and use the singular unwrapped schema (see CreateUnwrapped); a batch
+	// array silently creates only the first element. BankTransfers and BatchPayments are the
+	// documented exceptions ("Creates one or many...") and keep the plural wrapped-array shape.
+	PutBatchSupported bool
+	// CreateUnwrapped sends the create body as a bare single object instead of the usual
+	// {JSONKey: [obj]} envelope. Xero's OpenAPI spec defines PUT-create request bodies against
+	// the singular schema (e.g. Account, not Accounts) for every PUT-create resource except
+	// BankTransfers and BatchPayments, which keep the plural array schema for batch support.
+	CreateUnwrapped bool
+	// NoPagination marks a resource whose Xero list endpoint has no page/pageSize support at
+	// all (e.g. BankTransfers) - a single GET already returns the full result set, so `list
+	// --all` must not loop: PaginateAll's `len(arr) < pageSize` termination check never fires
+	// when the true result size >= pageSize, causing an infinite fetch loop.
+	NoPagination bool
 }
 
 // ListOpts configures a list command.
@@ -126,7 +143,7 @@ Xero returns up to 100 records per page. Use --all to fetch all pages.`, def.Plu
 			}
 
 			var items gjson.Result
-			if allPages {
+			if allPages && !def.NoPagination {
 				pageSize, _ := cmd.Root().PersistentFlags().GetInt("page-size")
 				items, err = api.PaginateAll(cmd.Context(), client, def.APIPath, params, def.JSONKey, pageSize)
 				if err != nil {
@@ -191,7 +208,7 @@ func NewGetCmd(f *Factory, def ResourceDef) *cobra.Command {
 			}
 			ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", def.APIPath, args[0])
+			path := fmt.Sprintf("%s/%s", def.APIPath, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -237,20 +254,31 @@ func NewCreateCmd(f *Factory, def ResourceDef) *cobra.Command {
 			}
 
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
+			isBatch := IsBatchInput(input)
+
+			if def.CreateUsesPut && isBatch && !def.PutBatchSupported {
+				return fmt.Errorf("%s only supports creating one %s per call; Xero silently creates just the first element of a batch array here", def.APIPath, def.Name)
+			}
 
 			var result json.RawMessage
-			var wrapped map[string]json.RawMessage
-			if IsBatchInput(input) {
-				// Wrap array in the resource key for Xero API
-				wrapped = map[string]json.RawMessage{def.JSONKey: input}
+			if def.CreateUsesPut && def.CreateUnwrapped {
+				// Xero's PUT-create schema for this resource is the bare singular object, not
+				// the usual {JSONKey: [obj]} envelope (verified against the OpenAPI spec).
+				result, err = client.Put(cmd.Context(), def.APIPath, json.RawMessage(input), idempotencyKey)
 			} else {
-				// Single item - wrap in the resource key
-				wrapped = map[string]json.RawMessage{def.JSONKey: json.RawMessage("[" + string(input) + "]")}
-			}
-			if def.CreateUsesPut {
-				result, err = client.Put(cmd.Context(), def.APIPath, wrapped)
-			} else {
-				result, err = client.Post(cmd.Context(), def.APIPath, wrapped, idempotencyKey)
+				var wrapped map[string]json.RawMessage
+				if isBatch {
+					// Wrap array in the resource key for Xero API
+					wrapped = map[string]json.RawMessage{def.JSONKey: input}
+				} else {
+					// Single item - wrap in the resource key
+					wrapped = map[string]json.RawMessage{def.JSONKey: json.RawMessage("[" + string(input) + "]")}
+				}
+				if def.CreateUsesPut {
+					result, err = client.Put(cmd.Context(), def.APIPath, wrapped, idempotencyKey)
+				} else {
+					result, err = client.Post(cmd.Context(), def.APIPath, wrapped, idempotencyKey)
+				}
 			}
 			if err != nil {
 				return err
@@ -299,7 +327,7 @@ func NewUpdateCmd(f *Factory, def ResourceDef) *cobra.Command {
 			// Xero requires this wrapper for updates.
 			wrapped := json.RawMessage(`{"` + def.JSONKey + `":[` + string(input) + `]}`)
 
-			path := fmt.Sprintf("%s/%s", def.APIPath, args[0])
+			path := fmt.Sprintf("%s/%s", def.APIPath, url.PathEscape(args[0]))
 			result, err := client.PostRaw(cmd.Context(), path, wrapped, "")
 			if err != nil {
 				return err
@@ -339,7 +367,7 @@ func NewDeleteCmd(f *Factory, def ResourceDef) *cobra.Command {
 			}
 			ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s", def.APIPath, args[0])
+			path := fmt.Sprintf("%s/%s", def.APIPath, url.PathEscape(args[0]))
 			_, err = client.Delete(cmd.Context(), path)
 			if err != nil {
 				return err
@@ -371,7 +399,7 @@ func NewHistoryCmd(f *Factory, def ResourceDef) *cobra.Command {
 			}
 			ApplyClientFlags(cmd, client, f)
 
-			path := fmt.Sprintf("%s/%s/History", def.APIPath, args[0])
+			path := fmt.Sprintf("%s/%s/History", def.APIPath, url.PathEscape(args[0]))
 			data, err := client.Get(cmd.Context(), path, nil)
 			if err != nil {
 				return err
@@ -416,8 +444,8 @@ func NewAllocateCmd(f *Factory, def ResourceDef) *cobra.Command {
 				},
 			}
 
-			path := fmt.Sprintf("%s/%s/Allocations", def.APIPath, args[0])
-			result, err := client.Put(cmd.Context(), path, body)
+			path := fmt.Sprintf("%s/%s/Allocations", def.APIPath, url.PathEscape(args[0]))
+			result, err := client.Put(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
 			}
@@ -448,7 +476,7 @@ func NewAttachCmd(f *Factory, def ResourceDef) *cobra.Command {
 			ApplyClientFlags(cmd, client, f)
 
 			filePath := args[1]
-			path := fmt.Sprintf("%s/%s/Attachments/%s", def.APIPath, args[0], filepath.Base(filePath))
+			path := fmt.Sprintf("%s/%s/Attachments/%s", def.APIPath, url.PathEscape(args[0]), url.PathEscape(filepath.Base(filePath)))
 
 			data, err := os.ReadFile(filePath)
 			if err != nil {
@@ -485,20 +513,29 @@ func NewArchiveCmd(f *Factory, def ResourceDef) *cobra.Command {
 			}
 			ApplyClientFlags(cmd, client, f)
 
-			body := map[string]any{
-				def.IDField: args[0],
-				"Status":    "ARCHIVED",
+			// Xero has no PUT route on {APIPath}/{id}; archiving is an update, done the same
+			// way NewUpdateCmd does it - POST a wrapped envelope to the element-scoped path.
+			archiveItem, err := json.Marshal(map[string]any{def.IDField: args[0], "Status": "ARCHIVED"})
+			if err != nil {
+				return err
 			}
+			body := map[string]json.RawMessage{def.JSONKey: json.RawMessage("[" + string(archiveItem) + "]")}
 
-			path := fmt.Sprintf("%s/%s", def.APIPath, args[0])
-			result, err := client.Put(cmd.Context(), path, body)
+			path := fmt.Sprintf("%s/%s", def.APIPath, url.PathEscape(args[0]))
+			result, err := client.Post(cmd.Context(), path, body, "")
 			if err != nil {
 				return err
 			}
 
 			format := GetOutputFormat(cmd, f.IO)
 			formatter := f.Formatter(format)
-			return formatter.FormatOne(f.IO.Out, gjson.ParseBytes(result), def.Columns)
+
+			parsed := gjson.ParseBytes(result)
+			item := parsed.Get(def.JSONKey + ".0")
+			if !item.Exists() {
+				item = parsed
+			}
+			return formatter.FormatOne(f.IO.Out, item, def.Columns)
 		},
 	}
 
@@ -671,7 +708,7 @@ func ApplyClientFlags(cmd *cobra.Command, client *api.Client, f *Factory) {
 
 	dryRun, _ := cmd.Root().PersistentFlags().GetBool("dry-run")
 	if dryRun {
-		client.SetDryRun(true)
+		client.SetDryRun(true, f.IO.ErrOut)
 	}
 
 	tenant, _ := cmd.Root().PersistentFlags().GetString("tenant")

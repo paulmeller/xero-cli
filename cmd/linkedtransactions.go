@@ -20,6 +20,8 @@ func newLinkedTransactionsCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "STATUS", Path: "Status", Format: "status"},
 		},
 		HasCreate: true, HasUpdate: true, HasDelete: true,
+		CreateUsesPut:   true, // Xero's linked-transactions collection is create-via-PUT, update-via-POST
+		CreateUnwrapped: true, // createLinkedTransaction PUT body is a bare LinkedTransaction object
 	}
 	return cmdutil.NewResourceCmd(f, def)
 }

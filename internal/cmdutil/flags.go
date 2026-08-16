@@ -31,6 +31,8 @@ func BuildListParams(cmd *cobra.Command) url.Values {
 		params.Set("pageSize", fmt.Sprintf("%d", v))
 	}
 	if v, _ := cmd.Flags().GetString("modified-since"); v != "" {
+		// Not a real query param - Xero only honours this as an If-Modified-Since HTTP header.
+		// Stashed under this key as a carrier; api.Client.Get pulls it back out onto the header.
 		params.Set("If-Modified-Since", v)
 	}
 

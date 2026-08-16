@@ -16,7 +16,9 @@ func newCurrenciesCmd(f *cmdutil.Factory) *cobra.Command {
 			{Header: "CODE", Path: "Code"},
 			{Header: "DESCRIPTION", Path: "Description"},
 		},
-		HasCreate: true,
+		HasCreate:       true,
+		CreateUsesPut:   true, // Xero's currencies collection is create-via-PUT, update-via-POST
+		CreateUnwrapped: true, // createCurrency PUT body is a bare Currency object, not {"Currencies":[...]}
 	}
 	return cmdutil.NewResourceCmd(f, def)
 }

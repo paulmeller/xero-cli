@@ -116,10 +116,16 @@ func (e *Engine) syncStream(ctx context.Context, sc StreamConfig) error {
 
 	// Paginate through all results
 	var allRecords []json.RawMessage
+	var prevPageRaw string
 	page := 1
 	pageSize := 100
+	const maxPages = 1000
 
 	for {
+		if page > maxPages {
+			return fmt.Errorf("sync %s: exceeded %d pages - this endpoint may not support page/pageSize pagination", sc.Name, maxPages)
+		}
+
 		params.Set("page", fmt.Sprintf("%d", page))
 		params.Set("pageSize", fmt.Sprintf("%d", pageSize))
 
@@ -139,6 +145,15 @@ func (e *Engine) syncStream(ctx context.Context, sc StreamConfig) error {
 		if len(arr) == 0 {
 			break
 		}
+
+		// Some Xero collections (e.g. BankTransfers) ignore page/pageSize entirely and return
+		// the full result set on every call, so len(arr) < pageSize never fires. Stop if
+		// consecutive "pages" come back byte-identical instead of re-fetching forever - see the
+		// identical fix in api.PaginateAll.
+		if items.Raw == prevPageRaw {
+			break
+		}
+		prevPageRaw = items.Raw
 
 		for _, item := range arr {
 			allRecords = append(allRecords, json.RawMessage(item.Raw))

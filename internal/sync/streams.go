@@ -30,6 +30,7 @@ var StreamRegistry = map[string]StreamMeta{
 	"repeating_invoices":  {APIPath: "RepeatingInvoices", JSONKey: "RepeatingInvoices", PrimaryKey: "RepeatingInvoiceID"},
 	"batch_payments":      {APIPath: "BatchPayments", JSONKey: "BatchPayments", PrimaryKey: "BatchPaymentID"},
 	"linked_transactions": {APIPath: "LinkedTransactions", JSONKey: "LinkedTransactions", PrimaryKey: "LinkedTransactionID"},
+	"bank_transfers":      {APIPath: "BankTransfers", JSONKey: "BankTransfers", PrimaryKey: "BankTransferID"},
 }
 
 // StreamPriority defines sync order (high-change streams first).
@@ -48,6 +49,7 @@ var StreamPriority = []string{
 	"prepayments",
 	"batch_payments",
 	"linked_transactions",
+	"bank_transfers",
 	"accounts",
 	"tax_rates",
 	"tracking_categories",

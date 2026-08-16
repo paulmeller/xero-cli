@@ -45,6 +45,18 @@ func ReadInput(cmd *cobra.Command) (json.RawMessage, error) {
 		return nil, fmt.Errorf("invalid JSON input")
 	}
 
+	// Reject bare scalars (null, true, 42, "foo"). Every create/update command wraps this value
+	// into a {JSONKey: [...]} envelope or sends it directly as the request body, so a scalar
+	// would silently become something like {"Accounts":[null]} and produce a confusing
+	// server-side error instead of a clear one here.
+	if data[0] != '{' && data[0] != '[' {
+		preview := string(data)
+		if len(preview) > 40 {
+			preview = preview[:40] + "..."
+		}
+		return nil, fmt.Errorf("input must be a JSON object or array, got: %s", preview)
+	}
+
 	return json.RawMessage(data), nil
 }
 
